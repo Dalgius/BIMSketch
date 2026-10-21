@@ -30,7 +30,8 @@ dalla geometria reale.
 
 ## Installazione
 
-1. Scarica `bimsketch-1.0.0.rbz` (oppure crealo con `rake build`, vedi sotto).
+1. Scarica il file `.rbz` dell'ultima versione dalla pagina
+   [Releases](https://github.com/Dalgius/BIMSketch/releases) (oppure crealo con `rake build`, vedi sotto).
 2. In SketchUp: **Estensioni → Extension Manager → Installa estensione…** e scegli il file `.rbz`.
 3. Compaiono il menu **Estensioni → BIMSketch** e la barra strumenti **BIMSketch**
    (se non è visibile: *Visualizza → Barre degli strumenti → BIMSketch*).
@@ -108,6 +109,19 @@ entità IFC4). Per una validazione completa dello schema:
 pip install ifcopenshell pytest
 python -m ifcopenshell.validate --rules modello.ifc
 ```
+
+### Pubblicare una nuova versione
+
+1. Aggiorna `VERSION` in `src/bimsketch/version.rb` (es. `1.1.0`).
+2. Facoltativo: scrivi le note di rilascio in `release-notes/v1.1.0.md`
+   (se il file manca, GitHub le genera dai commit).
+3. Dopo il merge su `main`, crea e invia il tag:
+   ```bash
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+Il workflow `Release` esegue i test, compila il `.rbz` e pubblica la release con il
+pacchetto allegato. Se il tag non corrisponde alla versione, il workflow si ferma.
 
 Le icone PNG si rigenerano dalle SVG con
 `NODE_PATH=$(npm root -g) node tools/render_icons.js` (richiede Playwright).

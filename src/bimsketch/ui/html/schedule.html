@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Abaco quantità</title>
+<link rel="stylesheet" href="common.css">
+<script src="common.js"></script>
+</head>
+<body>
+<h1>Abaco delle quantità</h1>
+<div id="error" class="notice error-text" style="display:none"></div>
+<div class="toolbar">
+  <select id="fType"><option value="">Tutte le categorie</option></select>
+  <select id="fLevel"><option value="">Tutti i livelli</option></select>
+  <input id="fText" placeholder="Cerca nome, tipologia, materiale…">
+  <button id="refresh">Aggiorna</button>
+  <button class="primary" id="csv">Esporta CSV…</button>
+</div>
+<h2>Riepilogo per categoria</h2>
+<div class="panel"><table>
+  <thead><tr><th>Categoria</th><th class="num">N.</th><th class="num">Lunghezza (m)</th>
+    <th class="num">Superficie (m²)</th><th class="num">Volume (m³)</th></tr></thead>
+  <tbody id="totals"></tbody>
+</table></div>
+<h2>Elementi <span class="muted" id="countInfo"></span></h2>
+<div class="panel scroll"><table>
+  <thead><tr><th>Categoria</th><th>Nome</th><th>Tipologia</th><th>Livello</th><th>Materiale</th>
+    <th class="num">Lungh. (m)</th><th class="num">Spess. (m)</th><th class="num">Alt. (m)</th>
+    <th class="num">Sup. (m²)</th><th class="num">Vol. (m³)</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table></div>
+
+<script>
+(function () {
+  var data = { rows: [], totals: [], levels: [] };
+
+  function sum(rows, key) {
+    var s = 0, any = false;
+    rows.forEach(function (r) { if (r[key] !== null && r[key] !== undefined) { s += r[key]; any = true; } });
+    return any ? s : null;
+  }
+
+  function filtered() {
+    var t = BIM.$('fType').value, l = BIM.$('fLevel').value, q = BIM.$('fText').value.toLowerCase();
+    return data.rows.filter(function (r) {
+      if (t && r.type !== t) return false;
+      if (l && r.level_id !== l) return false;
+      if (q && (r.name + ' ' + r.object_type + ' ' + r.material).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function draw() {
+    var rows = filtered();
+    var groups = {};
+    rows.forEach(function (r) { (groups[r.type] = groups[r.type] || []).push(r); });
+    var th = '';
+    Object.keys(groups).forEach(function (k) {
+      var g = groups[k];
+      th += '<tr class="clickable" data-type="' + BIM.esc(k) + '"><td>' + BIM.esc(k) + '</td><td class="num">' + g.length + '</td>' +
+        '<td class="num">' + BIM.num(sum(g, 'length')) + '</td><td class="num">' + BIM.num(sum(g, 'area')) + '</td>' +
+        '<td class="num">' + BIM.num(sum(g, 'volume'), 3) + '</td></tr>';
+    });
+    BIM.$('totals').innerHTML = th || '<tr><td colspan="5" class="muted">Nessun elemento BIM.</td></tr>';
+    var html = '';
+    rows.forEach(function (r) {
+      html += '<tr class="clickable" data-guid="' + BIM.esc(r.guid) + '"><td>' + BIM.esc(r.type) + '</td><td>' + BIM.esc(r.name) +
+        '</td><td>' + BIM.esc(r.object_type) + '</td><td>' + BIM.esc(r.level) + '</td><td>' + BIM.esc(r.material) +
+        '</td><td class="num">' + BIM.num(r.length) + '</td><td class="num">' + BIM.num(r.width) +
+        '</td><td class="num">' + BIM.num(r.height) + '</td><td class="num">' + BIM.num(r.area) +
+        '</td><td class="num">' + BIM.num(r.volume, 3) + '</td></tr>';
+    });
+    BIM.$('rows').innerHTML = html;
+    BIM.$('countInfo').textContent = '(' + rows.length + ' di ' + data.rows.length + ')';
+  }
+
+  BIM.render = function (d) {
+    data = d;
+    var types = [];
+    d.rows.forEach(function (r) { if (types.indexOf(r.type) < 0) types.push(r.type); });
+    var ft = BIM.$('fType'), fl = BIM.$('fLevel');
+    var tv = ft.value, lv = fl.value;
+    ft.innerHTML = '<option value="">Tutte le categorie</option>' + types.map(function (t) {
+      return '<option' + (t === tv ? ' selected' : '') + '>' + BIM.esc(t) + '</option>';
+    }).join('');
+    fl.innerHTML = '<option value="">Tutti i livelli</option>' + d.levels.map(function (l) {
+      return '<option value="' + BIM.esc(l.id) + '"' + (l.id === lv ? ' selected' : '') + '>' + BIM.esc(l.name) + '</option>';
+    }).join('');
+    draw();
+  };
+
+  ['fType', 'fLevel'].forEach(function (id) { BIM.$(id).addEventListener('change', draw); });
+  BIM.$('fText').addEventListener('input', draw);
+  BIM.$('refresh').addEventListener('click', function () { BIM.call('refresh'); });
+  BIM.$('csv').addEventListener('click', function () { BIM.call('export_csv'); });
+  BIM.$('rows').addEventListener('click', function (ev) {
+    var tr = ev.target.closest('tr[data-guid]');
+    if (tr) BIM.call('select', { guids: [tr.getAttribute('data-guid')] });
+  });
+  BIM.$('totals').addEventListener('click', function (ev) {
+    var tr = ev.target.closest('tr[data-type]');
+    if (!tr) return;
+    var t = tr.getAttribute('data-type');
+    BIM.call('select', { guids: filtered().filter(function (r) { return r.type === t; }).map(function (r) { return r.guid; }) });
+  });
+})();
+</script>
+</body>
+</html>

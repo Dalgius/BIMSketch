@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Proprietà BIM</title>
+<link rel="stylesheet" href="common.css">
+<script src="common.js"></script>
+</head>
+<body>
+<div id="error" class="notice error-text" style="display:none"></div>
+<div id="app"><p class="muted">Caricamento…</p></div>
+
+<script>
+(function () {
+  var state = null;
+
+  function typeByKey(key) {
+    for (var i = 0; i < state.types.length; i++) if (state.types[i].key === key) return state.types[i];
+    return null;
+  }
+
+  function options(list, selected, blank) {
+    var html = blank !== undefined ? '<option value="">' + BIM.esc(blank) + '</option>' : '';
+    list.forEach(function (o) {
+      html += '<option value="' + BIM.esc(o.value) + '"' + (String(o.value) === String(selected) ? ' selected' : '') +
+              '>' + BIM.esc(o.label) + '</option>';
+    });
+    return html;
+  }
+
+  function row(label, control) {
+    return '<div class="row"><label>' + BIM.esc(label) + '</label>' + control + '</div>';
+  }
+
+  function propControl(p, value, multi) {
+    var id = 'prop_' + p.name;
+    if (p.type === 'boolean') {
+      var v = value === true ? 'true' : value === false ? 'false' : '';
+      return '<select id="' + id + '" data-prop="' + p.name + '">' +
+        options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No' }], v, multi ? '(invariato)' : '—') +
+        '</select>';
+    }
+    var shown = value === null || value === undefined ? '' : String(value);
+    if (['real', 'length', 'area', 'thermal'].indexOf(p.type) >= 0) shown = shown.replace('.', ',');
+    return '<input id="' + id + '" data-prop="' + p.name + '" value="' + BIM.esc(shown) + '"' +
+      (multi ? ' placeholder="(invariato)"' : '') + '>';
+  }
+
+  function renderProps(typeKey, props, multi) {
+    var t = typeByKey(typeKey);
+    if (!t) return '';
+    var html = '<h2>' + BIM.esc(t.pset || 'Proprietà') + '</h2><div class="panel">';
+    t.props.forEach(function (p) { html += row(p.label, propControl(p, props ? props[p.name] : null, multi)); });
+    return html + '</div>';
+  }
+
+  function renderCustom(custom) {
+    var html = '<h2>Proprietà personalizzate</h2><div class="panel"><table id="custom"><tbody>';
+    Object.keys(custom || {}).forEach(function (k) { html += customRow(k, custom[k]); });
+    html += '</tbody></table><div class="toolbar"><button class="small" id="addCustom">+ Aggiungi proprietà</button></div></div>';
+    return html;
+  }
+
+  function customRow(k, v) {
+    return '<tr><td><input class="ck" placeholder="Nome" value="' + BIM.esc(k) + '"></td>' +
+      '<td><input class="cv" placeholder="Valore" value="' + BIM.esc(v) + '"></td>' +
+      '<td><button class="small del">×</button></td></tr>';
+  }
+
+  function typeOptions() {
+    return state.types.map(function (t) { return { value: t.key, label: t.label + ' (' + t.ifc + ')' }; });
+  }
+
+  function levelOptions() {
+    return state.levels.map(function (l) { return { value: l.id, label: l.name }; });
+  }
+
+  function predefinedOptions(typeKey) {
+    var t = typeByKey(typeKey);
+    return t ? t.predefined.map(function (p) { return { value: p, label: p }; }) : [];
+  }
+
+  function classifyBox() {
+    if (!state.unclassified) return '';
+    return '<div class="panel" style="margin-top:10px"><b>' + state.unclassified +
+      ' oggetti non classificati</b> nella selezione.<div class="row" style="margin-top:8px">' +
+      '<select id="classType">' + options(typeOptions(), 'wall') + '</select>' +
+      '<button class="primary" id="classify">Classifica</button></div></div>';
+  }
+
+  function renderSingle() {
+    var e = state.element;
+    var html = '<h1>' + BIM.esc(e.name || (typeByKey(e.type) || {}).label || 'Elemento') + '</h1>';
+    html += '<div class="panel">' +
+      row('Categoria IFC', '<select id="f_type">' + options(typeOptions(), e.type) + '</select>') +
+      row('Tipo predefinito', '<select id="f_predefined">' + options(predefinedOptions(e.type), e.predefined) + '</select>') +
+      row('Nome', '<input id="f_name" value="' + BIM.esc(e.name) + '">') +
+      row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="es. Muratura laterizio 30 cm" value="' + BIM.esc(e.object_type) + '">') +
+      row('Livello', '<select id="f_level">' + options(levelOptions(), e.level, '(automatico)') + '</select>') +
+      row('Materiale BIM', '<input id="f_material" placeholder="' + BIM.esc(e.sketchup_material) + '" value="' + BIM.esc(e.material) + '">') +
+      row('IFC GlobalId', '<input readonly value="' + BIM.esc(e.guid) + '">') +
+      '</div>';
+    html += '<div id="propsBox">' + renderProps(e.type, e.props, false) + '</div>';
+    html += renderCustom(e.custom);
+    html += '<h2>Quantità</h2><div class="panel">';
+    if (!e.quantities.length) html += '<span class="muted">Nessuna quantità calcolabile.</span>';
+    e.quantities.forEach(function (q) {
+      html += row(q.label, '<input readonly class="num" value="' + BIM.esc(q.value + ' ' + q.unit) + '">');
+    });
+    if (!e.solid) html += '<div class="notice">L\'elemento non è un solido chiuso: il volume netto non è disponibile.</div>';
+    html += '</div>';
+    html += '<div class="toolbar"><button class="primary" id="save">Applica</button>' +
+      '<button id="refresh">Aggiorna</button><button id="declassify">Rimuovi classificazione</button></div>';
+    html += classifyBox();
+    return html;
+  }
+
+  function renderMulti() {
+    var html = '<h1>' + state.count + ' elementi BIM selezionati</h1><div class="panel">';
+    state.summary.forEach(function (s) { html += '<div>' + BIM.esc(s.label) + ': <b>' + s.count + '</b></div>'; });
+    html += '</div><h2>Modifica comune</h2><div class="panel">' +
+      row('Categoria IFC', '<select id="f_type">' + options(typeOptions(), '', '(invariato)') + '</select>') +
+      row('Livello', '<select id="f_level">' + options(levelOptions(), '', '(invariato)') + '</select>') +
+      row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="(invariato)">') +
+      row('Materiale BIM', '<input id="f_material" placeholder="(invariato)">') + '</div>';
+    html += '<div id="propsBox">' + (state.common_type ? renderProps(state.common_type, {}, true) : '') + '</div>';
+    html += '<div class="toolbar"><button class="primary" id="save">Applica a tutti</button>' +
+      '<button id="refresh">Aggiorna</button></div>';
+    html += classifyBox();
+    return html;
+  }
+
+  function renderNone() {
+    var html = '<h1>Proprietà BIM</h1>';
+    if (!state.unclassified) {
+      html += '<p class="muted">Seleziona un elemento nel modello per vederne le proprietà BIM.</p>' +
+        '<p class="muted">Usa gli strumenti BIMSketch per disegnare muri, solai, pilastri, travi, porte e finestre, ' +
+        'oppure classifica gruppi e componenti esistenti.</p>';
+    }
+    return html + classifyBox() +
+      '<div class="toolbar"><button id="levelsBtn">Gestisci livelli…</button></div>';
+  }
+
+  function collect() {
+    var multi = state.mode === 'multi';
+    var el = {};
+    ['type', 'predefined', 'name', 'object_type', 'level', 'material'].forEach(function (k) {
+      var f = BIM.$('f_' + k);
+      if (f) el[k] = f.value;
+    });
+    var props = {};
+    var nodes = document.querySelectorAll('[data-prop]');
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var v = n.value;
+      if (n.tagName === 'SELECT') v = v === 'true' ? true : v === 'false' ? false : '';
+      if (!(multi && v === '')) props[n.getAttribute('data-prop')] = v;
+    }
+    el.props = props;
+    if (!multi) {
+      var custom = {};
+      var rows = document.querySelectorAll('#custom tr');
+      for (var j = 0; j < rows.length; j++) {
+        var k = rows[j].querySelector('.ck').value.trim();
+        if (k) custom[k] = rows[j].querySelector('.cv').value;
+      }
+      el.custom = custom;
+    }
+    return { mode: state.mode, element: el };
+  }
+
+  function bind() {
+    var on = function (id, ev, fn) { var el = BIM.$(id); if (el) el.addEventListener(ev, fn); };
+    on('save', 'click', function () { BIM.call('save', collect()); });
+    on('refresh', 'click', function () { BIM.call('refresh'); });
+    on('declassify', 'click', function () {
+      if (confirm('Rimuovere i dati BIM dall\'elemento?')) BIM.call('declassify');
+    });
+    on('classify', 'click', function () { BIM.call('classify', { type: BIM.$('classType').value }); });
+    on('levelsBtn', 'click', function () { BIM.call('levels'); });
+    on('f_type', 'change', function () {
+      var key = BIM.$('f_type').value;
+      var box = BIM.$('propsBox');
+      if (state.mode === 'single') {
+        BIM.$('f_predefined').innerHTML = options(predefinedOptions(key), '');
+        if (box) box.innerHTML = renderProps(key, state.element.props, false);
+      } else {
+        var k = key || state.common_type;
+        box.innerHTML = k ? renderProps(k, {}, true) : '';
+      }
+    });
+    on('addCustom', 'click', function () {
+      BIM.$('custom').querySelector('tbody').insertAdjacentHTML('beforeend', customRow('', ''));
+    });
+    var custom = BIM.$('custom');
+    if (custom) custom.addEventListener('click', function (ev) {
+      if (ev.target.classList.contains('del')) {
+        var tr = ev.target.closest('tr');
+        tr.parentNode.removeChild(tr);
+      }
+    });
+  }
+
+  BIM.render = function (data) {
+    state = data;
+    BIM.$('error').style.display = 'none';
+    var html = data.mode === 'single' ? renderSingle() : data.mode === 'multi' ? renderMulti() : renderNone();
+    BIM.$('app').innerHTML = html;
+    bind();
+  };
+
+  BIM.saved = function () {
+    var b = BIM.$('save');
+    if (b) { b.textContent = 'Salvato ✓'; setTimeout(function () { if (BIM.$('save')) BIM.$('save').textContent = 'Applica'; }, 1200); }
+  };
+})();
+</script>
+</body>
+</html>

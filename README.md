@@ -110,6 +110,18 @@ pip install ifcopenshell pytest
 python -m ifcopenshell.validate --rules modello.ifc
 ```
 
+### Autotest dentro SketchUp
+
+`tools/autotest.rb` prova le funzioni principali dentro un vero SketchUp (muri, giunti,
+taglio di porte e finestre, solidità e volumi, livelli, proprietà, abaco, IFC, strumenti).
+Con BIMSketch installata apri un modello vuoto, poi nella Ruby Console:
+
+```ruby
+load "C:/percorso/autotest.rb"
+```
+
+Il resoconto ✓/✗ viene stampato nella console.
+
 ### Pubblicare una nuova versione
 
 1. Aggiorna `VERSION` in `src/bimsketch/version.rb` (es. `1.1.0`).

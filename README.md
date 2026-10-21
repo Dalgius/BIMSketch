@@ -150,8 +150,6 @@ Le icone PNG si rigenerano dalle SVG con
 - La geometria IFC è esportata come superficie triangolata (non parametrica); le aperture
   sono già ritagliate nella geometria del muro e non sono esportate come IfcOpeningElement.
 - Il giunto d'angolo automatico dei muri vale per l'allineamento in asse.
-- Se la vista in pianta mostra la parte superiore invece di quella inferiore usa
-  *Inverti sezione attiva*.
 
 ## Licenza
 

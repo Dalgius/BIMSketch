@@ -353,7 +353,12 @@ module BIMSketchAutotest
       check('Vista in pianta del Piano Terra') do
         page = BIMSketch::Levels.create_plan_view(model, 'L0')
         assert(page, 'scena non creata')
-        "scena \"#{page.name}\" creata (verifica a occhio, vedi sotto)"
+        sp = model.entities.active_section_plane
+        assert(sp, 'nessun piano di sezione attivo')
+        n = sp.get_plane
+        assert(n[2] < 0, "normale del piano di sezione verso l'alto: #{n.inspect}")
+        "scena \"#{page.name}\" creata, sezione attiva a #{format('%.2f', -n[3] / n[2] * 0.0254)} m " \
+          '(verifica a occhio, vedi sotto)'
       end
     end
 

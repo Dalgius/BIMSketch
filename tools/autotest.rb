@@ -57,6 +57,14 @@ module BIMSketchAutotest
       Geom::Point3d.new(x.m, y.m, z.m)
     end
 
+    # Diagnostica topologica: spigoli che non hanno esattamente due facce.
+    def topology(entity)
+      edges = entity.definition.entities.grep(Sketchup::Edge)
+      open_edges = edges.reject { |e| e.faces.size == 2 }
+      "#{entity.definition.entities.grep(Sketchup::Face).size} facce, #{edges.size} spigoli, " \
+        "#{open_edges.size} spigoli non chiusi"
+    end
+
     def quantities(entity)
       rec = BIMSketch::Collector.record(model, entity, entity.transformation, false)
       BIMSketch::Records.quantities(rec)
@@ -155,7 +163,7 @@ module BIMSketchAutotest
         assert(d && d.valid?, 'porta non creata')
         assert(BIMSketch::BimData.read(d)['host'] == BIMSketch::BimData.guid(w), 'porta non collegata al muro')
         vol = volume_m3(w)
-        assert(vol, 'dopo il taglio il muro NON è più un solido chiuso')
+        assert(vol, "dopo il taglio il muro NON è più un solido chiuso (#{topology(w)})")
         [approx(vol, 4.5 - 0.9 * 0.3 * 2.1, 0.002, 'vol. muro'),
          approx(qty(d, 'Width'), 0.9, 0.001, 'larghezza porta'),
          approx(qty(d, 'Height'), 2.1, 0.001, 'altezza porta')].join(', ')
@@ -168,11 +176,21 @@ module BIMSketchAutotest
         @e[:window] = f
         assert(f && f.valid?, 'finestra non creata')
         vol = volume_m3(w)
-        assert(vol, 'dopo il taglio il muro NON è più un solido chiuso')
+        assert(vol, "dopo il taglio il muro NON è più un solido chiuso (#{topology(w)})")
         bb = f.bounds
         [approx(vol, 4.5 - 0.567 - 0.504, 0.002, 'vol. muro'),
          approx(bb.min.z.to_m, 0.9, 0.001, 'quota davanzale'),
          approx(qty(w, 'NetSideArea'), 15.0 - 1.89 - 1.68, 0.02, 'sup. netta muro')].join(', ')
+      end
+      check('Aperture registrate nel muro') do
+        n = BIMSketch::Builder.wall_openings(@e[:wall]).size
+        assert(n == 2, "aperture registrate: #{n}")
+        topology(@e[:wall])
+      end
+      check('Apertura sovrapposta rifiutata') do
+        r = BIMSketch::Builder.opening_rect(@e[:wall], 2.5.m, 0.9.m, 2.1.m, 0)
+        assert(r.nil?, 'una porta sovrapposta a quella esistente è stata accettata')
+        'ok'
       end
       check('Apertura troppo grande rifiutata') do
         r = BIMSketch::Builder.opening_rect(@e[:wall], 2.5.m, 6.m, 2.m, 0)

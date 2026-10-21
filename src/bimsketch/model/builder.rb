@@ -93,20 +93,52 @@ module BIMSketch
         entity.get_attribute(BimData::DICT, 'parametric') == true
     end
 
+    OPENING_GAP = 10.mm
+
+    # Aperture già presenti nel muro (coordinate locali).
+    def wall_openings(wall)
+      raw = wall.get_attribute(BimData::DICT, 'openings')
+      raw ? JSON.parse(raw) : []
+    rescue JSON::ParserError
+      []
+    end
+
+    # Il muro è ancora il box parametrico con le sue aperture? (se è stato
+    # modificato a mano la ricostruzione ne perderebbe le modifiche)
+    def wall_intact?(wall)
+      bb = wall.definition.bounds
+      det = Geometry.scales(wall.transformation).reduce(:*)
+      vol = wall.volume
+      return false unless vol > 0 && det > 0
+
+      expected = WallProfile.net_volume(bb.min.x, bb.max.x, bb.min.y, bb.max.y, bb.min.z, bb.max.z,
+                                        wall_openings(wall))
+      (vol / det - expected).abs <= [expected * 0.001, 1.0].max
+    end
+
     # Calcola il rettangolo dell'apertura (coordinate locali del muro).
-    # Restituisce [a, b, c, d] oppure nil se non entra nel muro.
+    # Restituisce [a, b, c, d] oppure nil se non entra nel muro o si
+    # sovrappone a un'altra apertura.
     def opening_rect(wall, local_x, width, height, sill)
       sx, _sy, sz = Geometry.scales(wall.transformation)
       bb = wall.definition.bounds
-      len = bb.max.x
-      wall_h = bb.max.z
-      w = width / sx
-      h = height / sz
-      c = sill / sz
-      return nil if w >= len || c + h > wall_h - Geometry::TOL * 10
+      x0 = bb.min.x.to_f
+      x1 = bb.max.x.to_f
+      z0 = bb.min.z.to_f
+      w = width.to_f / sx
+      h = height.to_f / sz
+      c = z0 + sill.to_f / sz
+      local_x = local_x.to_f
+      gap = OPENING_GAP / sx
+      door = sill <= Geometry::TOL
+      margin = door ? 0 : gap
+      return nil if w > (x1 - x0) - 2 * margin || c + h > bb.max.z - OPENING_GAP / sz
 
-      a = [[local_x - w / 2.0, 0].max, len - w].min
-      [a, a + w, c, c + h]
+      a = [[local_x - w / 2.0, x0 + margin].max, x1 - margin - w].min
+      rect = [a, a + w, c, c + h].map(&:to_f)
+      return nil if WallProfile.overlaps?(rect, wall_openings(wall), gap)
+
+      rect
     end
 
     # Inserisce una porta o una finestra in un muro parametrico: taglia il
@@ -115,8 +147,12 @@ module BIMSketch
       rect = opening_rect(wall, local_x, width, height, sill)
       return nil unless rect
 
+      raise "il muro è stato modificato a mano: non è possibile inserire l'apertura" unless wall_intact?(wall)
+
       a, b, c, d = rect
-      Geometry.cut_opening(wall, a, b, c, d)
+      openings = wall_openings(wall) + [rect]
+      Geometry.rebuild_wall(wall, openings)
+      wall.set_attribute(BimData::DICT, 'openings', JSON.generate(openings))
       wall_tr = wall.transformation
       t = wall.definition.bounds.max.y
       _sx, sy, = Geometry.scales(wall_tr)

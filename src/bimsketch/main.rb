@@ -7,7 +7,7 @@ module BIMSketch
   ROOT = File.dirname(__FILE__)
 
   %w[core/element_types core/quantities core/guid core/level_list core/step
-     core/ifc_writer core/records
+     core/ifc_writer core/records core/wall_profile
      model/settings model/levels model/bim_data model/geometry model/builder model/collector
      tools/base_tool tools/linear_tools tools/opening_tool
      commands ui/dialogs].each { |f| require File.join(ROOT, f) }

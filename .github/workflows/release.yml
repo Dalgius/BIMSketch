@@ -3,6 +3,8 @@ name: Release
 # Pubblica una release su GitHub con il pacchetto .rbz allegato.
 # Si avvia creando e inviando un tag di versione, ad esempio:
 #   git tag v1.0.0 && git push origin v1.0.0
+# oppure creando la release dal sito di GitHub con un nuovo tag: in quel caso
+# il workflow allega il .rbz alla release già esistente.
 # Il tag deve corrispondere a BIMSketch::VERSION in src/bimsketch/version.rb.
 # Le note di rilascio vengono lette da release-notes/<tag>.md se il file
 # esiste, altrimenti sono generate automaticamente da GitHub.
@@ -33,10 +35,14 @@ jobs:
           fi
       - run: rake test
       - run: rake build
-      - name: Crea la release
+      - name: Crea la release o allega il pacchetto
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.rbz --clobber
+            exit 0
+          fi
           NOTES="release-notes/$GITHUB_REF_NAME.md"
           if [ -f "$NOTES" ]; then
             NOTES_ARGS=(--notes-file "$NOTES")

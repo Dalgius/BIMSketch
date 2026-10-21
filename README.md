@@ -13,7 +13,7 @@ dalla geometria reale.
 
 | Area | Cosa fa |
 |---|---|
-| **Modellazione BIM** | Strumenti **Muro** (a catena, con giunti d'angolo e chiusura automatica del perimetro, allineamento asse/sinistra/destra, lunghezza da tastiera), **Solaio** (contorno a clic), **Pilastro**, **Trave**, **Porta** e **Finestra** (tagliano il foro passante nel muro e creano l'elemento nel vano) |
+| **Modellazione BIM** | Strumenti **Muro** (a catena, con aggancio alle estremità dei muri esistenti e giunti d'angolo automatici, allineamento asse/sinistra/destra, lunghezza da tastiera), **Solaio** (contorno a clic), **Pilastro**, **Trave**, **Porta** e **Finestra** (tagliano il foro passante nel muro e creano l'elemento nel vano) |
 | **Elemento da faccia** | Crea solai, coperture, fondazioni, rivestimenti o **spazi (locali)** estrudendo le facce selezionate, anche inclinate e con fori |
 | **Classificazione** | Trasforma gruppi, componenti o geometria esistenti in elementi BIM: 14 categorie IFC (IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcDoor, IfcWindow, IfcRoof, IfcStair, IfcRailing, IfcCovering, IfcFooting, IfcFurniture, IfcSpace, IfcBuildingElementProxy) con tipo predefinito, tag SketchUp e materiale di categoria. Se nel modello è caricato uno schema IFC applica anche la classificazione nativa di SketchUp |
 | **Proprietà BIM** | Pannello che segue la selezione: categoria, tipo predefinito, nome, tipologia (ObjectType), livello, materiale, GlobalId, **Pset standard** (Pset_WallCommon, Pset_DoorCommon, …: portante, esterno, REI, trasmittanza U, ecc.), proprietà personalizzate e quantità calcolate. Modifica multipla su più elementi |

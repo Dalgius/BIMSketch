@@ -66,7 +66,19 @@ class WallJointTest < Minitest::Test
     assert_in_delta 0.15, boxes[1][2], 1e-9
   end
 
+  # Walls joined at their start points: the first one is seen reversed.
+  def test_reversed_wall_uses_flipped_band
+    band = J.band('left', T)
+    # A drawn from the corner towards -x occupies y in [-t, 0]; B drawn from the
+    # corner towards +y occupies x in [-t, 0]: they already meet without overlap.
+    assert_equal [0.0, 0.0], J.corner([1, 0], [0, 1], J.flip(band), band).map { |v| v.round(9).abs }
+    # Same corner with B going -y (x in [0, t]): A must reach x = t, B starts at y = -t.
+    s, r = J.corner([1, 0], [0, -1], J.flip(band), band)
+    assert_in_delta 0.3, s, 1e-9
+    assert_in_delta 0.3, r, 1e-9
+  end
+
   def test_collinear_has_no_joint
-    assert_equal [0.0, 0.0], J.corner([1, 0], [1, 0], -0.15, 0.15)
+    assert_equal [0.0, 0.0], J.corner([1, 0], [1, 0], [-0.15, 0.15], [-0.15, 0.15])
   end
 end

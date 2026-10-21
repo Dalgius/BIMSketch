@@ -22,10 +22,16 @@ module BIMSketch
       end
     end
 
-    # Giunto tra il muro A (direzione d_a) che termina nell'angolo e il muro B
-    # (direzione d_b) che vi inizia. Restituisce [ext_end_a, trim_start_b]:
-    # di quanto prolungare A oltre l'angolo e di quanto accorciare B all'inizio.
-    def corner(d_a, d_b, lo, hi)
+    # Fascia vista percorrendo il muro al contrario.
+    def flip(band)
+      [-band[1], -band[0]]
+    end
+
+    # Giunto tra il muro A (direzione d_a, fascia band_a) che termina
+    # nell'angolo e il muro B (direzione d_b, fascia band_b) che vi inizia.
+    # Restituisce [ext_end_a, trim_start_b]: di quanto prolungare A oltre
+    # l'angolo e di quanto accorciare B all'inizio.
+    def corner(d_a, d_b, band_a, band_b)
       cross = d_a[0] * d_b[1] - d_a[1] * d_b[0]
       return [0.0, 0.0] if cross.abs < MIN_SIN
 
@@ -33,8 +39,8 @@ module BIMSketch
       n_b = [-d_b[1], d_b[0]]
       along_a = []
       along_b = []
-      [lo, hi].each do |u|
-        [lo, hi].each do |v|
+      band_a.each do |u|
+        band_b.each do |v|
           q = [v * n_b[0] - u * n_a[0], v * n_b[1] - u * n_a[1]]
           along_a << (q[0] * d_b[1] - q[1] * d_b[0]) / cross
           along_b << (q[0] * d_a[1] - q[1] * d_a[0]) / cross
@@ -60,7 +66,7 @@ module BIMSketch
       pairs = (0...segs.size - 1).map { |i| [i, i + 1] }
       pairs << [segs.size - 1, 0] if closed && segs.size > 2
       pairs.each do |i, j|
-        ext_end, trim = corner(direction(*segs[i]), direction(*segs[j]), lo, hi)
+        ext_end, trim = corner(direction(*segs[i]), direction(*segs[j]), [lo, hi], [lo, hi])
         exts[i][1] = ext_end
         exts[j][0] = -trim
       end

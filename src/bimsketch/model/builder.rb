@@ -17,27 +17,144 @@ module BIMSketch
       group
     end
 
-    # Muro da p1 a p2 (stessa quota), con spessore, altezza e allineamento
-    # ('center', 'left', 'right' rispetto alla direzione di disegno).
-    # ext_start/ext_end prolungano (o accorciano, se negativi) il muro agli estremi.
-    def wall(model, p1, p2, thickness, height, align = 'center', ext_start: 0, ext_end: 0)
+    # Sistema locale e lunghezza di un muro da p1 a p2 (coordinate mondo).
+    def wall_frame(p1, p2, thickness, align, ext_start, ext_end)
       dir = p2 - p1
       dir.z = 0
       return nil if dir.length < Geometry::TOL
 
       xaxis = dir.normalize
-      yaxis = Z_AXIS * xaxis
-      offset = case align
-               when 'left' then 0
-               when 'right' then -thickness
-               else -thickness / 2.0
-               end
-      origin = p1.offset(yaxis, offset)
+      lo, = WallJoint.band(align, thickness.to_f)
+      origin = Geom::Point3d.new(p1.x, p1.y, p1.z)
+      origin = origin.offset(Z_AXIS * xaxis, lo) unless lo.zero?
       origin = origin.offset(xaxis, -ext_start) unless ext_start.zero?
-      length = dir.length + ext_start + ext_end
-      tr = Geometry.frame_transform(origin, xaxis)
+      [Geometry.frame_transform(origin, xaxis), dir.length + ext_start + ext_end]
+    end
+
+    # Muro da p1 a p2 (stessa quota), con spessore, altezza e allineamento
+    # ('center', 'left', 'right' rispetto alla direzione di disegno).
+    # ext_start/ext_end prolungano (o accorciano, se negativi) il muro agli estremi.
+    def wall(model, p1, p2, thickness, height, align = 'center', ext_start: 0, ext_end: 0)
+      frame = wall_frame(p1, p2, thickness, align, ext_start.to_f, ext_end.to_f)
+      return nil unless frame
+
+      tr, length = frame
       group = Geometry.create_group(model, tr) { |ents| Geometry.box(ents, length, thickness, height) }
-      finish(model, group, 'wall', { 'wall_align' => align })
+      finish(model, group, 'wall', { 'wall_align' => align,
+                                     'ext' => JSON.generate([ext_start.to_f, ext_end.to_f]) })
+    end
+
+    # Parametri di un muro parametrico ricavati dalla sua geometria: estremi
+    # dell'asse (coordinate mondo, senza prolungamenti), spessore, altezza,
+    # allineamento e prolungamenti. nil se non è un muro parametrico.
+    def wall_params(model, wall)
+      return nil unless parametric_wall?(wall)
+
+      ext = begin
+        JSON.parse(wall.get_attribute(BimData::DICT, 'ext') || '[0,0]').map(&:to_f)
+      rescue JSON::ParserError
+        [0.0, 0.0]
+      end
+      bb = wall.definition.bounds
+      sx, sy, sz = Geometry.scales(wall.transformation)
+      align = wall.get_attribute(BimData::DICT, 'wall_align') || 'center'
+      local_t = bb.max.y - bb.min.y
+      lo, = WallJoint.band(align, local_t.to_f)
+      world = model.active_path ? model.edit_transform * wall.transformation : wall.transformation
+      axis_y = bb.min.y - lo
+      p1 = Geom::Point3d.new(bb.min.x + ext[0] / sx, axis_y, bb.min.z).transform(world)
+      p2 = Geom::Point3d.new(bb.max.x - ext[1] / sx, axis_y, bb.min.z).transform(world)
+      { p1: p1, p2: p2, thickness: local_t * sy, height: (bb.max.z - bb.min.z) * sz,
+        align: align, ext: ext }
+    end
+
+    # Ricostruisce un muro esistente con nuovi prolungamenti, mantenendo gruppo,
+    # GlobalId e proprietà. Solo per muri senza aperture e non modificati a mano.
+    def reshape_wall(model, wall, ext_start, ext_end)
+      pr = wall_params(model, wall)
+      return false unless pr && wall_openings(wall).empty? && wall_intact?(wall)
+
+      frame = wall_frame(pr[:p1], pr[:p2], pr[:thickness], pr[:align], ext_start, ext_end)
+      return false unless frame
+
+      tr, length = frame
+      tr = model.edit_transform.inverse * tr if model.active_path
+      wall.make_unique if wall.respond_to?(:make_unique)
+      ents = wall.definition.entities
+      ents.clear!
+      Geometry.box(ents, length, pr[:thickness], pr[:height])
+      wall.transformation = tr
+      wall.set_attribute(BimData::DICT, 'ext', JSON.generate([ext_start.to_f, ext_end.to_f]))
+      true
+    end
+
+    # Estremità di un muro parametrico del contesto attivo vicina al punto
+    # (in pianta, stessa quota di base). Restituisce { wall:, at: :p1|:p2, point:, params: }.
+    def wall_end_near(model, point, tolerance, exclude = nil)
+      best = nil
+      model.active_entities.each do |e|
+        next if e == exclude || !parametric_wall?(e)
+
+        pr = wall_params(model, e)
+        next if (pr[:p1].z - point.z).abs > 1.mm
+
+        { p1: pr[:p1], p2: pr[:p2] }.each do |at, q|
+          d = Math.hypot(q.x - point.x, q.y - point.y)
+          best = [d, { wall: e, at: at, point: q, params: pr }] if d <= tolerance && (best.nil? || d < best[0])
+        end
+      end
+      best && best[1]
+    end
+
+    # Raggio entro cui un nuovo muro si aggancia all'estremità di un muro esistente.
+    def snap_tolerance(thickness)
+      thickness * 1.5
+    end
+
+    # Muro da p1 a p2 che si aggancia ai muri esistenti: se un estremo cade
+    # vicino all'estremità di un altro muro parametrico, il punto viene
+    # portato sull'asse di quel muro e l'angolo viene raccordato (anche il
+    # muro esistente viene adattato). Restituisce { wall:, end_point:, joined_end: }.
+    def wall_connected(model, p1, p2, thickness, height, align = 'center')
+      tol = snap_tolerance(thickness)
+      start_hit = wall_end_near(model, p1, tol)
+      p1 = start_hit[:point] if start_hit
+      end_hit = wall_end_near(model, p2, tol, start_hit && start_hit[:wall])
+      p2 = Geom::Point3d.new(end_hit[:point].x, end_hit[:point].y, p1.z) if end_hit
+      return nil if Math.hypot(p2.x - p1.x, p2.y - p1.y) < Geometry::TOL
+
+      band_n = WallJoint.band(align, thickness.to_f)
+      dir_n = planar_dir(p1, p2)
+      ext_start = 0.0
+      ext_end = 0.0
+      if start_hit
+        pr = start_hit[:params]
+        band_w = WallJoint.band(pr[:align], pr[:thickness].to_f)
+        if start_hit[:at] == :p2
+          s, r = WallJoint.corner(planar_dir(pr[:p1], pr[:p2]), dir_n, band_w, band_n)
+          ext_start = -r if reshape_wall(model, start_hit[:wall], pr[:ext][0], s)
+        else
+          s, r = WallJoint.corner(planar_dir(pr[:p2], pr[:p1]), dir_n, WallJoint.flip(band_w), band_n)
+          ext_start = -r if reshape_wall(model, start_hit[:wall], s, pr[:ext][1])
+        end
+      end
+      if end_hit
+        pr = end_hit[:params]
+        band_w = WallJoint.band(pr[:align], pr[:thickness].to_f)
+        if end_hit[:at] == :p1
+          s, r = WallJoint.corner(dir_n, planar_dir(pr[:p1], pr[:p2]), band_n, band_w)
+          ext_end = s if reshape_wall(model, end_hit[:wall], -r, pr[:ext][1])
+        else
+          s, r = WallJoint.corner(dir_n, planar_dir(pr[:p2], pr[:p1]), band_n, WallJoint.flip(band_w))
+          ext_end = s if reshape_wall(model, end_hit[:wall], pr[:ext][0], -r)
+        end
+      end
+      group = wall(model, p1, p2, thickness, height, align, ext_start: ext_start, ext_end: ext_end)
+      group && { wall: group, end_point: p2, joined_end: !end_hit.nil? }
+    end
+
+    def planar_dir(p, q)
+      WallJoint.direction([p.x.to_f, p.y.to_f], [q.x.to_f, q.y.to_f])
     end
 
     # Sequenza di muri tra i punti indicati (stessa quota), con i giunti

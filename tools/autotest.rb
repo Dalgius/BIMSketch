@@ -105,6 +105,7 @@ module BIMSketchAutotest
 
       run_levels
       run_walls
+      run_separate_walls
       run_openings
       run_other_elements
       run_classification
@@ -172,6 +173,40 @@ module BIMSketchAutotest
            approx(overlap_m3(walls), 0, 0.0001, 'sovrapposizioni'),
            approx(bb.min.x.to_m - 20, xs[0], 0.001, 'bordo esterno'),
            approx(bb.max.x.to_m - 20, xs[1], 0.001, 'bordo opposto')].join(', ')
+        end
+      end
+    end
+
+    # Muri disegnati uno alla volta, ogni volta partendo vicino allo spigolo del
+    # precedente (come con lo strumento Muro): devono agganciarsi e raccordarsi.
+    def run_separate_walls
+      [['center', [[0, 0], [5, 0], [5, 4], [0, 4]], 5.3 * 4.3 - 4.7 * 3.7],
+       ['left', [[0, 0], [0, 4], [5, 4], [5, 0]], 5.6 * 4.6 - 5 * 4]].each_with_index do |(align, corners, area), k|
+        check("Muri separati agganciati in perimetro, allineamento #{align}") do
+          x0 = 40
+          y0 = 20 + k * 8
+          guid = nil
+          walls = []
+          closed = nil
+          corners.each_with_index do |(cx, cy), i|
+            nx, ny = corners[(i + 1) % corners.size]
+            # Il clic iniziale cade a 10-15 cm dall'estremità del muro precedente.
+            jitter = i.zero? ? 0 : 0.12
+            a = pt(x0 + cx + jitter, y0 + cy - jitter, 0)
+            b = pt(x0 + nx + (i == corners.size - 1 ? 0.1 : 0), y0 + ny + (i == corners.size - 1 ? 0.08 : 0), 0)
+            model.start_operation('Autotest muro separato', true)
+            res = BIMSketch::Builder.wall_connected(model, a, b, 0.3.m, 3.m, align)
+            model.commit_operation
+            assert(res, "muro #{i + 1} non creato")
+            walls << res[:wall]
+            guid ||= BIMSketch::BimData.guid(res[:wall])
+            closed = res[:joined_end]
+          end
+          assert(closed, "l'ultimo muro non si è agganciato al primo")
+          assert(walls.all?(&:valid?), 'un muro è stato cancellato')
+          assert(BIMSketch::BimData.guid(walls.first) == guid, 'il primo muro ha perso il suo GlobalId')
+          [approx(walls.sum { |w| volume_m3(w) || 0 }, area * 3, 0.002, 'volume totale'),
+           approx(overlap_m3(walls), 0, 0.0001, 'sovrapposizioni')].join(', ')
         end
       end
     end

@@ -10,7 +10,7 @@ module BIMSketch
 
         pt = projected(level_z)
         if @points.empty?
-          @points << pt
+          @points << snapped(pt)
           @ref_ip.copy!(@ip)
         else
           create_to(pt)
@@ -45,18 +45,13 @@ module BIMSketch
 
       protected
 
-      def reset_tool
-        super
-        @chain = []
-      end
-
       def update_ui
         Sketchup.status_text = if @points.empty?
-                                 "Muro: clic sul punto iniziale. #{level_label}. " \
+                                 "Muro: clic sul punto iniziale (si aggancia ai muri esistenti). #{level_label}. " \
                                    'Tasto destro: impostazioni.'
                                else
-                                 'Muro: clic sul punto finale o digita la lunghezza. Clic sul ' \
-                                   'punto iniziale per chiudere; doppio clic, Invio o Esc per terminare.'
+                                 'Muro: clic sul punto finale o digita la lunghezza. I muri si ' \
+                                   'agganciano alle estremità dei muri esistenti; doppio clic, Invio o Esc per terminare.'
                                end
         Sketchup.vcb_label = 'Lunghezza'
       end
@@ -75,8 +70,7 @@ module BIMSketch
         return if @points.empty? || !@ip.valid?
 
         p1 = @points.last
-        p2 = projected(level_z)
-        p2 = @points.first if closes_loop?(p2, thickness)
+        p2 = snapped(projected(level_z))
         dir = p2 - p1
         return if dir.length < Geometry::TOL
 
@@ -91,67 +85,27 @@ module BIMSketch
 
       def create_to(pt)
         start = @points.last
-        t = thickness
-        closing = closes_loop?(pt, t)
-        pt = @points.first if closing
         return if start.distance(pt) < Geometry::TOL
 
-        h = height
         align = Settings.get('wall_align')
-        lo, hi = WallJoint.band(align, t)
-        wall = run_operation('BIMSketch: Muro') do
-          rec = { p1: start, p2: pt, ext_start: 0.0, ext_end: 0.0 }
-          prev = @chain.last
-          if prev && prev[:group].valid? && prev[:p2].distance(start) < Geometry::TOL
-            ext_end, trim = WallJoint.corner(dir2d(prev), dir2d(rec), lo, hi)
-            prev[:ext_end] = ext_end
-            rec[:ext_start] = -trim
-            rebuild(prev, t, h, align)
-          end
-          if closing
-            first = @chain.first
-            ext_end, trim = WallJoint.corner(dir2d(rec), dir2d(first), lo, hi)
-            rec[:ext_end] = ext_end
-            first[:ext_start] = -trim
-            rebuild(first, t, h, align) if first[:group].valid?
-          end
-          rec[:group] = build(rec, t, h, align)
-          @chain << rec if rec[:group]
-          rec[:group]
+        result = run_operation('BIMSketch: Muro') do
+          Builder.wall_connected(model, start, pt, thickness, height, align)
         end
-        return unless wall
+        return unless result
 
-        if closing
+        if result[:joined_end]
+          # Il muro si è agganciato a un muro esistente (es. chiusura del perimetro).
           reset_tool
         else
-          @points << pt
+          @points << result[:end_point]
           @ref_ip.copy!(@ip)
         end
       end
 
-      # Chiusura dell'anello: il punto cade vicino al primo punto della catena.
-      def closes_loop?(pt, thickness)
-        first = @chain.first
-        @points.size >= 3 && first && first[:p1] == @points.first &&
-          pt.distance(@points.first) <= thickness
-      end
-
-      def dir2d(rec)
-        WallJoint.direction([rec[:p1].x, rec[:p1].y], [rec[:p2].x, rec[:p2].y])
-      end
-
-      def build(rec, t, h, align)
-        Builder.wall(model, rec[:p1], rec[:p2], t, h, align,
-                     ext_start: rec[:ext_start].to_f, ext_end: rec[:ext_end].to_f)
-      end
-
-      # Ricrea un muro appena disegnato con i nuovi prolungamenti (solo se
-      # non è stato modificato: senza aperture).
-      def rebuild(rec, t, h, align)
-        return unless rec[:group].valid? && Builder.wall_openings(rec[:group]).empty?
-
-        rec[:group].erase!
-        rec[:group] = build(rec, t, h, align)
+      # Punto agganciato all'estremità di un muro esistente, se vicino.
+      def snapped(pt)
+        hit = Builder.wall_end_near(model, pt, Builder.snap_tolerance(thickness))
+        hit ? Geom::Point3d.new(hit[:point].x, hit[:point].y, pt.z) : pt
       end
     end
 

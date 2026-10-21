@@ -123,6 +123,11 @@ python -m ifcopenshell.validate --rules modello.ifc
 Il workflow `Release` esegue i test, compila il `.rbz` e pubblica la release con il
 pacchetto allegato. Se il tag non corrisponde alla versione, il workflow si ferma.
 
+In alternativa, anche da smartphone, si può creare la release dal sito di GitHub
+(*Releases → Draft a new release*, nuovo tag `v1.1.0` su `main`, titolo e note,
+*Publish release*): il workflow parte con il nuovo tag e allega il `.rbz` alla
+release dopo un paio di minuti.
+
 Le icone PNG si rigenerano dalle SVG con
 `NODE_PATH=$(npm root -g) node tools/render_icons.js` (richiede Playwright).
 

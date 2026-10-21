@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Verifica modello</title>
+<link rel="stylesheet" href="common.css">
+<script src="common.js"></script>
+</head>
+<body>
+<h1>Verifica del modello BIM</h1>
+<div id="error" class="notice error-text" style="display:none"></div>
+<p class="muted" id="summary"></p>
+<div class="toolbar">
+  <button id="refresh">Riesegui verifica</button>
+  <button id="fixGuids">Correggi GlobalId duplicati</button>
+  <button id="assignLevels">Assegna livelli mancanti</button>
+</div>
+<div class="panel scroll"><table><tbody id="issues"></tbody></table></div>
+
+<script>
+(function () {
+  var LABELS = { error: 'Errore', warning: 'Avviso', info: 'Info' };
+  var issues = [];
+
+  BIM.render = function (d) {
+    issues = d.issues;
+    BIM.$('summary').textContent = d.count + ' elementi BIM analizzati, ' + issues.length + ' segnalazioni.';
+    var html = '';
+    issues.forEach(function (i, idx) {
+      html += '<tr><td><span class="badge ' + i.severity + '">' + LABELS[i.severity] + '</span></td>' +
+        '<td style="white-space:normal">' + BIM.esc(i.message) + '</td><td>' +
+        (i.guids.length ? '<button class="small" data-idx="' + idx + '">Seleziona</button>' : '') + '</td></tr>';
+    });
+    BIM.$('issues').innerHTML = html || '<tr><td>✓ Nessun problema rilevato.</td></tr>';
+  };
+
+  BIM.$('issues').addEventListener('click', function (ev) {
+    var idx = ev.target.getAttribute('data-idx');
+    if (idx !== null) BIM.call('select', { guids: issues[Number(idx)].guids });
+  });
+  BIM.$('refresh').addEventListener('click', function () { BIM.call('refresh'); });
+  BIM.$('fixGuids').addEventListener('click', function () { BIM.call('fix_guids'); });
+  BIM.$('assignLevels').addEventListener('click', function () { BIM.call('assign_levels'); });
+})();
+</script>
+</body>
+</html>

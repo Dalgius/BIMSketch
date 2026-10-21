@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Livelli</title>
+<link rel="stylesheet" href="common.css">
+<script src="common.js"></script>
+</head>
+<body>
+<h1>Livelli dell'edificio</h1>
+<div id="error" class="notice error-text" style="display:none"></div>
+<div class="panel scroll">
+  <table>
+    <thead><tr><th></th><th>Nome</th><th class="num">Quota (m)</th><th class="num">Altezza (m)</th>
+      <th class="num">Elementi</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+<div class="toolbar">
+  <button id="add">+ Nuovo livello</button>
+  <button class="primary" id="save">Salva modifiche</button>
+  <label class="muted"><input type="checkbox" id="move" checked> sposta gli elementi se cambia la quota</label>
+</div>
+<div class="toolbar">
+  <button id="showAll">Mostra tutti i livelli</button>
+</div>
+<p class="muted">Il livello corrente (●) è usato dagli strumenti di disegno: muri e pilastri partono dalla
+  sua quota, i solai hanno l'estradosso alla sua quota e le travi sotto il livello superiore.</p>
+
+<script>
+(function () {
+  var state = { levels: [], current: null };
+
+  function read() {
+    var out = [];
+    var rows = document.querySelectorAll('#rows tr');
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      out.push({
+        id: r.getAttribute('data-id'),
+        name: r.querySelector('.name').value,
+        elevation: r.querySelector('.elev').value.replace(',', '.'),
+        height: r.querySelector('.height').value.replace(',', '.')
+      });
+    }
+    return out;
+  }
+
+  BIM.render = function (data) {
+    state = data;
+    var html = '';
+    data.levels.forEach(function (l) {
+      var cur = l.id === data.current;
+      html += '<tr data-id="' + BIM.esc(l.id) + '"' + (cur ? ' class="current"' : '') + '>' +
+        '<td><button class="small act" data-act="set_current" title="Imposta come livello corrente">' + (cur ? '●' : '○') + '</button></td>' +
+        '<td><input class="name" value="' + BIM.esc(l.name) + '"></td>' +
+        '<td class="num"><input class="elev num" size="7" value="' + BIM.num(l.elevation, 3) + '"></td>' +
+        '<td class="num"><input class="height num" size="7" value="' + BIM.num(l.height, 3) + '"></td>' +
+        '<td class="num">' + l.count + '</td>' +
+        '<td>' +
+        '<button class="small act" data-act="select" title="Seleziona gli elementi">Seleziona</button> ' +
+        '<button class="small act" data-act="isolate" title="Mostra solo questo livello">Isola</button> ' +
+        '<button class="small act" data-act="assign" title="Assegna la selezione a questo livello">Assegna</button> ' +
+        '<button class="small act" data-act="plan_view" title="Crea scena con vista in pianta">Pianta</button> ' +
+        '<button class="small act" data-act="delete" title="Elimina livello">×</button>' +
+        '</td></tr>';
+    });
+    BIM.$('rows').innerHTML = html;
+  };
+
+  BIM.$('rows').addEventListener('click', function (ev) {
+    var b = ev.target.closest('button.act');
+    if (!b) return;
+    var id = b.closest('tr').getAttribute('data-id');
+    var act = b.getAttribute('data-act');
+    if (act === 'delete' && !confirm('Eliminare il livello? Gli elementi resteranno senza livello.')) return;
+    BIM.call(act, { id: id });
+  });
+  BIM.$('add').addEventListener('click', function () { BIM.call('add', { levels: read() }); });
+  BIM.$('save').addEventListener('click', function () {
+    BIM.call('save', { levels: read(), move: BIM.$('move').checked });
+  });
+  BIM.$('showAll').addEventListener('click', function () { BIM.call('show_all'); });
+})();
+</script>
+</body>
+</html>

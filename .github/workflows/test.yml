@@ -1,0 +1,21 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+      - run: gem install minitest rake
+      - run: rake test
+      - run: rake build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bimsketch-rbz
+          path: dist/*.rbz

@@ -1,0 +1,46 @@
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385;
+  --border: #d9dde5; --accent: #1f6fd1; --accent-text: #ffffff;
+  --error: #c62828; --warning: #b26a00; --info: #2f6fa8; --row: #f0f3f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e2127; --panel: #272b33; --text: #e6e9ef; --muted: #9aa3b5;
+    --border: #3a404c; --accent: #4a90e2; --row: #2e333d;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 12px; background: var(--bg); color: var(--text);
+  font: 13px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+h1 { font-size: 15px; margin: 0 0 10px; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 6px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.row > label { flex: 0 0 42%; color: var(--muted); }
+.row > input, .row > select { flex: 1; min-width: 0; }
+input, select, button {
+  font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;
+}
+input[readonly] { background: var(--row); }
+button { cursor: pointer; padding: 5px 10px; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.small { padding: 2px 7px; font-size: 12px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--row); }
+tr.clickable { cursor: pointer; }
+tr.current td { font-weight: 600; }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; color: #fff; }
+.badge.error { background: var(--error); }
+.badge.warning { background: var(--warning); }
+.badge.info { background: var(--info); }
+.notice { padding: 8px; border-radius: 4px; background: var(--row); margin: 8px 0; }
+.error-text { color: var(--error); }
+.scroll { overflow: auto; max-height: calc(100vh - 150px); }

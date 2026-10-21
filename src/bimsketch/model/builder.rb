@@ -40,6 +40,19 @@ module BIMSketch
       finish(model, group, 'wall', { 'wall_align' => align })
     end
 
+    # Sequenza di muri tra i punti indicati (stessa quota), con i giunti
+    # d'angolo calcolati da WallJoint. Se closed, l'ultimo punto si ricollega
+    # al primo. Restituisce i gruppi creati.
+    def wall_chain(model, points, thickness, height, align = 'center', closed: false)
+      lo, hi = WallJoint.band(align, thickness.to_f)
+      exts = WallJoint.chain(points.map { |p| [p.x.to_f, p.y.to_f] }, lo, hi, closed: closed)
+      ends = points.each_cons(2).to_a
+      ends << [points.last, points.first] if closed && points.size > 2
+      ends.each_with_index.map do |(p1, p2), i|
+        wall(model, p1, p2, thickness, height, align, ext_start: exts[i][0], ext_end: exts[i][1])
+      end
+    end
+
     # Solaio da un poligono (punti mondo); la faccia superiore sta alla quota top_z.
     def slab(model, points, thickness, top_z, holes: [], type_key: 'slab')
       prism_element(model, points, holes, top_z - thickness, thickness, type_key)

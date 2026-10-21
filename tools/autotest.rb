@@ -65,6 +65,16 @@ module BIMSketchAutotest
         "#{open_edges.size} spigoli non chiusi"
     end
 
+    # Volume totale delle sovrapposizioni tra i bounding box (muri allineati agli assi).
+    def overlap_m3(groups)
+      groups.combination(2).sum do |g1, g2|
+        a = g1.bounds
+        b = g2.bounds
+        d = [0, 1, 2].map { |i| [a.max[i], b.max[i]].min - [a.min[i], b.min[i]].max }
+        d.all? { |v| v > 0.001 } ? d.reduce(:*) * IN3_TO_M3 : 0.0
+      end
+    end
+
     def quantities(entity)
       rec = BIMSketch::Collector.record(model, entity, entity.transformation, false)
       BIMSketch::Records.quantities(rec)
@@ -137,18 +147,32 @@ module BIMSketchAutotest
          approx(qty(w, 'Height'), 3.0, 0.001, 'altezza'),
          approx(qty(w, 'NetSideArea'), 15.0, 0.01, 'sup. netta')].join(', ')
       end
-      check('Giunto d\'angolo (due muri in asse)') do
+      check('Catena aperta a L (giunto d\'angolo in asse)') do
         model.start_operation('Autotest angolo', true)
-        a = BIMSketch::Builder.wall(model, pt(0, 6, 0), pt(4, 6, 0), 0.3.m, 3.m, 'center', ext_end: 0.15.m)
-        b = BIMSketch::Builder.wall(model, pt(4, 6, 0), pt(4, 9, 0), 0.3.m, 3.m, 'center', ext_start: -0.15.m)
+        a, b = BIMSketch::Builder.wall_chain(model, [pt(0, 6, 0), pt(4, 6, 0), pt(4, 9, 0)], 0.3.m, 3.m)
         model.commit_operation
         assert(a.valid? && b.valid?, 'muri non creati')
-        bb = Geom::BoundingBox.new
-        bb.add(a.bounds)
-        bb.add(b.bounds)
         [approx(volume_m3(a), 4.15 * 0.3 * 3, 0.001, 'vol. A'),
          approx(volume_m3(b), 2.85 * 0.3 * 3, 0.001, 'vol. B'),
-         approx(bb.max.x.to_m, 4.15, 0.001, 'spigolo esterno x')].join(', ')
+         approx(overlap_m3([a, b]), 0, 0.0001, 'sovrapposizione')].join(', ')
+      end
+      [['center', 5.3 * 4.3 - 4.7 * 3.7, [-0.15, 5.15]],
+       ['left', 5 * 4 - 4.4 * 3.4, [0, 5]],
+       ['right', 5.6 * 4.6 - 5 * 4, [-0.3, 5.3]]].each_with_index do |(align, area, xs), k|
+        check("Anello chiuso 5 x 4, allineamento #{align}") do
+          y0 = 20 + k * 8
+          pts = [pt(20, y0, 0), pt(25, y0, 0), pt(25, y0 + 4, 0), pt(20, y0 + 4, 0)]
+          model.start_operation('Autotest anello', true)
+          walls = BIMSketch::Builder.wall_chain(model, pts, 0.3.m, 3.m, align, closed: true)
+          model.commit_operation
+          assert(walls.size == 4 && walls.all?(&:valid?), 'muri non creati')
+          bb = Geom::BoundingBox.new
+          walls.each { |w| bb.add(w.bounds) }
+          [approx(walls.sum { |w| volume_m3(w) || 0 }, area * 3, 0.001, 'volume totale'),
+           approx(overlap_m3(walls), 0, 0.0001, 'sovrapposizioni'),
+           approx(bb.min.x.to_m - 20, xs[0], 0.001, 'bordo esterno'),
+           approx(bb.max.x.to_m - 20, xs[1], 0.001, 'bordo opposto')].join(', ')
+        end
       end
     end
 

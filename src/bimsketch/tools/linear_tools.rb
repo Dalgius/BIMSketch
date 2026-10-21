@@ -5,8 +5,6 @@ module BIMSketch
     # Strumento Muro: clic su punto iniziale e finale, disegno a catena.
     # Digitando un valore nella VCB si fissa la lunghezza del segmento.
     class WallTool < BaseTool
-      COLLINEAR_TOL = 0.9998 # ~1°
-
       def onLButtonDown(_flags, _x, _y, view)
         return unless @ip.valid?
 
@@ -49,7 +47,7 @@ module BIMSketch
 
       def reset_tool
         super
-        @last = nil
+        @chain = []
       end
 
       def update_ui
@@ -57,8 +55,8 @@ module BIMSketch
                                  "Muro: clic sul punto iniziale. #{level_label}. " \
                                    'Tasto destro: impostazioni.'
                                else
-                                 'Muro: clic sul punto finale o digita la lunghezza. ' \
-                                   'Doppio clic, Invio o Esc per terminare.'
+                                 'Muro: clic sul punto finale o digita la lunghezza. Clic sul ' \
+                                   'punto iniziale per chiudere; doppio clic, Invio o Esc per terminare.'
                                end
         Sketchup.vcb_label = 'Lunghezza'
       end
@@ -78,6 +76,7 @@ module BIMSketch
 
         p1 = @points.last
         p2 = projected(level_z)
+        p2 = @points.first if closes_loop?(p2, thickness)
         dir = p2 - p1
         return if dir.length < Geometry::TOL
 
@@ -92,35 +91,67 @@ module BIMSketch
 
       def create_to(pt)
         start = @points.last
+        t = thickness
+        closing = closes_loop?(pt, t)
+        pt = @points.first if closing
         return if start.distance(pt) < Geometry::TOL
 
-        t = thickness
         h = height
         align = Settings.get('wall_align')
+        lo, hi = WallJoint.band(align, t)
         wall = run_operation('BIMSketch: Muro') do
-          ext_start = 0
-          if @last && @last[:group].valid? && align == 'center' && corner?(@last, start, pt)
-            # Giunto d'angolo: si prolunga il muro precedente e si accorcia il nuovo.
-            prev = @last
-            prev[:group].erase!
-            prev[:group] = Builder.wall(model, prev[:p1], prev[:p2], t, h, align,
-                                        ext_start: prev[:ext_start], ext_end: t / 2.0)
-            ext_start = -t / 2.0
+          rec = { p1: start, p2: pt, ext_start: 0.0, ext_end: 0.0 }
+          prev = @chain.last
+          if prev && prev[:group].valid? && prev[:p2].distance(start) < Geometry::TOL
+            ext_end, trim = WallJoint.corner(dir2d(prev), dir2d(rec), lo, hi)
+            prev[:ext_end] = ext_end
+            rec[:ext_start] = -trim
+            rebuild(prev, t, h, align)
           end
-          group = Builder.wall(model, start, pt, t, h, align, ext_start: ext_start)
-          @last = { group: group, p1: start, p2: pt, ext_start: ext_start } if group
-          group
+          if closing
+            first = @chain.first
+            ext_end, trim = WallJoint.corner(dir2d(rec), dir2d(first), lo, hi)
+            rec[:ext_end] = ext_end
+            first[:ext_start] = -trim
+            rebuild(first, t, h, align) if first[:group].valid?
+          end
+          rec[:group] = build(rec, t, h, align)
+          @chain << rec if rec[:group]
+          rec[:group]
         end
-        @points << pt if wall
-        @ref_ip.copy!(@ip)
+        return unless wall
+
+        if closing
+          reset_tool
+        else
+          @points << pt
+          @ref_ip.copy!(@ip)
+        end
       end
 
-      def corner?(last, start, pt)
-        return false unless last[:p2].distance(start) < Geometry::TOL
+      # Chiusura dell'anello: il punto cade vicino al primo punto della catena.
+      def closes_loop?(pt, thickness)
+        first = @chain.first
+        @points.size >= 3 && first && first[:p1] == @points.first &&
+          pt.distance(@points.first) <= thickness
+      end
 
-        d1 = (last[:p2] - last[:p1]).normalize
-        d2 = (pt - start).normalize
-        d1.dot(d2).abs < COLLINEAR_TOL
+      def dir2d(rec)
+        WallJoint.direction([rec[:p1].x, rec[:p1].y], [rec[:p2].x, rec[:p2].y])
+      end
+
+      def build(rec, t, h, align)
+        Builder.wall(model, rec[:p1], rec[:p2], t, h, align,
+                     ext_start: rec[:ext_start].to_f, ext_end: rec[:ext_end].to_f)
+      end
+
+      # Ricrea un muro appena disegnato con i nuovi prolungamenti (solo se
+      # non è stato modificato: senza aperture).
+      def rebuild(rec, t, h, align)
+        return unless rec[:group].valid? && Builder.wall_openings(rec[:group]).empty?
+
+        rec[:group].erase!
+        rec[:group] = build(rec, t, h, align)
       end
     end
 

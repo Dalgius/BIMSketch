@@ -39,7 +39,8 @@ module BIMSketch
           return
         end
         if rect.nil?
-          UI.messagebox("L'apertura non entra nel muro: verifica le dimensioni nelle impostazioni.")
+          UI.messagebox("L'apertura non entra nel muro o si sovrappone a un'altra apertura: " \
+                        'verifica posizione e dimensioni nelle impostazioni.')
           return
         end
         wall = @wall

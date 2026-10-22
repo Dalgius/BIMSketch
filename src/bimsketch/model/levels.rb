@@ -104,9 +104,9 @@ module BIMSketch
 
       model.start_operation('BIMSketch: Vista in pianta', true)
       z = (lvl['elevation'] + [1.2, lvl['height'] * 0.9].min).m
-      # La normale indica il lato rimosso dal taglio: si conserva la parte sotto.
-      # Se necessario la sezione si può invertire con "Inverti sezione attiva".
-      sp = model.entities.add_section_plane([0, 0, z], [0, 0, 1])
+      # La normale del piano punta verso la parte che resta visibile (verificato
+      # in SketchUp 2026): verso il basso per conservare ciò che sta sotto il taglio.
+      sp = model.entities.add_section_plane([0, 0, z], [0, 0, -1])
       sp.name = "Pianta #{lvl['name']}" if sp.respond_to?(:name=)
       sp.activate
       view = model.active_view

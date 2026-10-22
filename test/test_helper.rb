@@ -3,7 +3,7 @@
 require 'minitest/autorun'
 
 CORE = File.expand_path('../src/bimsketch/core', __dir__)
-%w[element_types quantities guid level_list step ifc_writer records].each do |f|
+%w[element_types quantities guid level_list step ifc_writer records wall_profile wall_joint].each do |f|
   require File.join(CORE, f)
 end
 

@@ -5,14 +5,12 @@ module BIMSketch
     # Strumento Muro: clic su punto iniziale e finale, disegno a catena.
     # Digitando un valore nella VCB si fissa la lunghezza del segmento.
     class WallTool < BaseTool
-      COLLINEAR_TOL = 0.9998 # ~1°
-
       def onLButtonDown(_flags, _x, _y, view)
         return unless @ip.valid?
 
         pt = projected(level_z)
         if @points.empty?
-          @points << pt
+          @points << snapped(pt)
           @ref_ip.copy!(@ip)
         else
           create_to(pt)
@@ -47,18 +45,13 @@ module BIMSketch
 
       protected
 
-      def reset_tool
-        super
-        @last = nil
-      end
-
       def update_ui
         Sketchup.status_text = if @points.empty?
-                                 "Muro: clic sul punto iniziale. #{level_label}. " \
+                                 "Muro: clic sul punto iniziale (si aggancia ai muri esistenti). #{level_label}. " \
                                    'Tasto destro: impostazioni.'
                                else
-                                 'Muro: clic sul punto finale o digita la lunghezza. ' \
-                                   'Doppio clic, Invio o Esc per terminare.'
+                                 'Muro: clic sul punto finale o digita la lunghezza. I muri si ' \
+                                   'agganciano alle estremità dei muri esistenti; doppio clic, Invio o Esc per terminare.'
                                end
         Sketchup.vcb_label = 'Lunghezza'
       end
@@ -77,7 +70,7 @@ module BIMSketch
         return if @points.empty? || !@ip.valid?
 
         p1 = @points.last
-        p2 = projected(level_z)
+        p2 = snapped(projected(level_z))
         dir = p2 - p1
         return if dir.length < Geometry::TOL
 
@@ -94,33 +87,25 @@ module BIMSketch
         start = @points.last
         return if start.distance(pt) < Geometry::TOL
 
-        t = thickness
-        h = height
         align = Settings.get('wall_align')
-        wall = run_operation('BIMSketch: Muro') do
-          ext_start = 0
-          if @last && @last[:group].valid? && align == 'center' && corner?(@last, start, pt)
-            # Giunto d'angolo: si prolunga il muro precedente e si accorcia il nuovo.
-            prev = @last
-            prev[:group].erase!
-            prev[:group] = Builder.wall(model, prev[:p1], prev[:p2], t, h, align,
-                                        ext_start: prev[:ext_start], ext_end: t / 2.0)
-            ext_start = -t / 2.0
-          end
-          group = Builder.wall(model, start, pt, t, h, align, ext_start: ext_start)
-          @last = { group: group, p1: start, p2: pt, ext_start: ext_start } if group
-          group
+        result = run_operation('BIMSketch: Muro') do
+          Builder.wall_connected(model, start, pt, thickness, height, align)
         end
-        @points << pt if wall
-        @ref_ip.copy!(@ip)
+        return unless result
+
+        if result[:joined_end]
+          # Il muro si è agganciato a un muro esistente (es. chiusura del perimetro).
+          reset_tool
+        else
+          @points << result[:end_point]
+          @ref_ip.copy!(@ip)
+        end
       end
 
-      def corner?(last, start, pt)
-        return false unless last[:p2].distance(start) < Geometry::TOL
-
-        d1 = (last[:p2] - last[:p1]).normalize
-        d2 = (pt - start).normalize
-        d1.dot(d2).abs < COLLINEAR_TOL
+      # Punto agganciato all'estremità di un muro esistente, se vicino.
+      def snapped(pt)
+        hit = Builder.wall_end_near(model, pt, Builder.snap_tolerance(thickness))
+        hit ? Geom::Point3d.new(hit[:point].x, hit[:point].y, pt.z) : pt
       end
     end
 

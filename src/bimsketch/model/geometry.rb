@@ -74,47 +74,33 @@ module BIMSketch
       point.transform(model.edit_transform.inverse)
     end
 
-    # Taglia un'apertura passante in un muro parametrico (box locale
-    # [0,L] x [0,T] x [0,H]). a..b = intervallo lungo x, c..d = lungo z.
-    def cut_opening(wall, a, b, c, d)
+    # Ricostruisce la geometria di un muro parametrico (box locale) con le
+    # aperture indicate: il prospetto (piano xz) con rientranze per le porte
+    # e fori per le finestre viene estruso lungo y per lo spessore del muro.
+    # openings: array di [a, b, c, d] in coordinate locali.
+    def rebuild_wall(wall, openings)
       wall.make_unique if wall.respond_to?(:make_unique)
       ents = wall.definition.entities
       bb = wall.definition.bounds
-      t = bb.max.y
+      x0 = bb.min.x
+      x1 = bb.max.x
+      y0 = bb.min.y
+      t = bb.max.y - y0
+      z0 = bb.min.z
+      z1 = bb.max.z
       eps = TOL * 10
+      outline = WallProfile.outline(x0, x1, z0, z1, openings, eps).map { |x, z| pt(x, y0, z) }
+      holes = WallProfile.holes(openings, z0, eps).map { |h| h.map { |x, z| pt(x, y0, z) } }
+      ents.clear!
+      face = ents.add_face(outline)
+      raise 'impossibile ricostruire il prospetto del muro' unless face
 
-      # Rettangoli sulle due facce del muro, poi eliminati per creare il foro.
-      [0, t].each do |y|
-        f = ents.add_face([pt(a, y, c), pt(b, y, c), pt(b, y, d), pt(a, y, d)])
-        f.erase! if f && f.valid?
+      holes.each do |hole|
+        inner = ents.add_face(hole)
+        inner.erase! if inner && inner.valid?
       end
-
-      # Facce di spalletta, orientate verso l'interno dell'apertura.
-      reveals = [
-        [[pt(a, 0, c), pt(a, t, c), pt(a, t, d), pt(a, 0, d)], X_AXIS],
-        [[pt(b, 0, c), pt(b, 0, d), pt(b, t, d), pt(b, t, c)], X_AXIS.reverse],
-        [[pt(a, 0, d), pt(a, t, d), pt(b, t, d), pt(b, 0, d)], Z_AXIS.reverse]
-      ]
-      reveals << [[pt(a, 0, c), pt(b, 0, c), pt(b, t, c), pt(a, t, c)], Z_AXIS] if c > eps
-      reveals.each do |pts, normal|
-        f = ents.add_face(pts)
-        f.reverse! if f && f.normal.dot(normal) < 0
-      end
-
-      # Per le porte (c = 0) si elimina la porzione della faccia di base.
-      if c <= eps
-        ents.grep(Sketchup::Face).each do |f|
-          next unless f.valid? && f.normal.z.abs > 0.99
-          next unless f.vertices.all? do |v|
-            p = v.position
-            p.z.abs < eps && p.x > a - eps && p.x < b + eps
-          end
-
-          f.erase!
-        end
-      end
-      stray = ents.grep(Sketchup::Edge).select { |e| e.valid? && e.faces.empty? }
-      ents.erase_entities(stray) unless stray.empty?
+      face.reverse! if face.normal.y > 0
+      face.pushpull(-t)
       true
     end
   end

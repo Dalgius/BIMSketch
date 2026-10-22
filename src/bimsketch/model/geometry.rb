@@ -74,33 +74,46 @@ module BIMSketch
       point.transform(model.edit_transform.inverse)
     end
 
-    # Ricostruisce la geometria di un muro parametrico (box locale) con le
-    # aperture indicate: il prospetto (piano xz) con rientranze per le porte
-    # e fori per le finestre viene estruso lungo y per lo spessore del muro.
-    # openings: array di [a, b, c, d] in coordinate locali.
-    def rebuild_wall(wall, openings)
-      wall.make_unique if wall.respond_to?(:make_unique)
-      ents = wall.definition.entities
-      bb = wall.definition.bounds
-      x0 = bb.min.x
-      x1 = bb.max.x
-      y0 = bb.min.y
-      t = bb.max.y - y0
-      z0 = bb.min.z
-      z1 = bb.max.z
+    # Geometria di un muro parametrico nel suo sistema locale: impronta da
+    # WallJoint.footprint (testate anche oblique, per i giunti a quartabuono)
+    # alta height, con le aperture [a, b, c, d]. Il prospetto della faccia
+    # y = 0 (rientranze per le porte, fori per le finestre) viene estruso
+    # fino a y = thickness; poi i vertici delle testate sulla faccia opposta
+    # vengono spostati per inclinare le testate.
+    def build_wall(ents, length, thickness, height, ext, openings)
+      fp = WallJoint.footprint(length.to_f, thickness.to_f, ext)
+      xs0 = fp[0][0]
+      xe0 = fp[1][0]
+      xe1 = fp[2][0]
+      xs1 = fp[3][0]
       eps = TOL * 10
-      outline = WallProfile.outline(x0, x1, z0, z1, openings, eps).map { |x, z| pt(x, y0, z) }
-      holes = WallProfile.holes(openings, z0, eps).map { |h| h.map { |x, z| pt(x, y0, z) } }
-      ents.clear!
+      outline = WallProfile.outline(xs0, xe0, 0.0, height.to_f, openings, eps).map { |x, z| pt(x, 0, z) }
+      holes = WallProfile.holes(openings, 0.0, eps).map { |h| h.map { |x, z| pt(x, 0, z) } }
       face = ents.add_face(outline)
-      raise 'impossibile ricostruire il prospetto del muro' unless face
+      raise 'impossibile costruire il prospetto del muro' unless face
 
       holes.each do |hole|
         inner = ents.add_face(hole)
         inner.erase! if inner && inner.valid?
       end
       face.reverse! if face.normal.y > 0
-      face.pushpull(-t)
+      face.pushpull(-thickness)
+
+      verts = []
+      vecs = []
+      ents.grep(Sketchup::Edge).flat_map(&:vertices).uniq.each do |v|
+        p = v.position
+        next unless (p.y - thickness).abs < eps
+
+        if (p.x - xs0).abs < eps && (xs1 - xs0).abs > eps
+          verts << v
+          vecs << Geom::Vector3d.new(xs1 - xs0, 0, 0)
+        elsif (p.x - xe0).abs < eps && (xe1 - xe0).abs > eps
+          verts << v
+          vecs << Geom::Vector3d.new(xe1 - xe0, 0, 0)
+        end
+      end
+      ents.transform_by_vectors(verts, vecs) unless verts.empty?
       true
     end
   end

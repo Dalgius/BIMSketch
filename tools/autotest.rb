@@ -65,16 +65,6 @@ module BIMSketchAutotest
         "#{open_edges.size} spigoli non chiusi"
     end
 
-    # Volume totale delle sovrapposizioni tra i bounding box (muri allineati agli assi).
-    def overlap_m3(groups)
-      groups.combination(2).sum do |g1, g2|
-        a = g1.bounds
-        b = g2.bounds
-        d = [0, 1, 2].map { |i| [a.max[i], b.max[i]].min - [a.min[i], b.min[i]].max }
-        d.all? { |v| v > 0.001 } ? d.reduce(:*) * IN3_TO_M3 : 0.0
-      end
-    end
-
     def quantities(entity)
       rec = BIMSketch::Collector.record(model, entity, entity.transformation, false)
       BIMSketch::Records.quantities(rec)
@@ -153,9 +143,9 @@ module BIMSketchAutotest
         a, b = BIMSketch::Builder.wall_chain(model, [pt(0, 6, 0), pt(4, 6, 0), pt(4, 9, 0)], 0.3.m, 3.m)
         model.commit_operation
         assert(a.valid? && b.valid?, 'muri non creati')
-        [approx(volume_m3(a), 4.15 * 0.3 * 3, 0.001, 'vol. A'),
-         approx(volume_m3(b), 2.85 * 0.3 * 3, 0.001, 'vol. B'),
-         approx(overlap_m3([a, b]), 0, 0.0001, 'sovrapposizione')].join(', ')
+        # Quartabuono: lunghezze medie 4 m e 3 m.
+        [approx(volume_m3(a), 4.0 * 0.3 * 3, 0.001, 'vol. A'),
+         approx(volume_m3(b), 3.0 * 0.3 * 3, 0.001, 'vol. B')].join(', ')
       end
       [['center', 5.3 * 4.3 - 4.7 * 3.7, [-0.15, 5.15]],
        ['left', 5 * 4 - 4.4 * 3.4, [0, 5]],
@@ -170,7 +160,6 @@ module BIMSketchAutotest
           bb = Geom::BoundingBox.new
           walls.each { |w| bb.add(w.bounds) }
           [approx(walls.sum { |w| volume_m3(w) || 0 }, area * 3, 0.001, 'volume totale'),
-           approx(overlap_m3(walls), 0, 0.0001, 'sovrapposizioni'),
            approx(bb.min.x.to_m - 20, xs[0], 0.001, 'bordo esterno'),
            approx(bb.max.x.to_m - 20, xs[1], 0.001, 'bordo opposto')].join(', ')
         end
@@ -205,9 +194,36 @@ module BIMSketchAutotest
           assert(closed, "l'ultimo muro non si è agganciato al primo")
           assert(walls.all?(&:valid?), 'un muro è stato cancellato')
           assert(BIMSketch::BimData.guid(walls.first) == guid, 'il primo muro ha perso il suo GlobalId')
-          [approx(walls.sum { |w| volume_m3(w) || 0 }, area * 3, 0.002, 'volume totale'),
-           approx(overlap_m3(walls), 0, 0.0001, 'sovrapposizioni')].join(', ')
+          approx(walls.sum { |w| volume_m3(w) || 0 }, area * 3, 0.002, 'volume totale')
         end
+      end
+      check('Perimetro irregolare (angoli non retti) disegnato a mano') do
+        # Le stesse estremità del perimetro segnalato dall'utente.
+        corners = [[0, 0], [0, 3.799], [2.941, 3.263], [2.390, -1.443]]
+        x0 = 60
+        y0 = 20
+        walls = []
+        closed = nil
+        corners.each_with_index do |(cx, cy), i|
+          nx, ny = corners[(i + 1) % corners.size]
+          model.start_operation('Autotest perimetro irregolare', true)
+          res = BIMSketch::Builder.wall_connected(model, pt(x0 + cx, y0 + cy, 0), pt(x0 + nx, y0 + ny, 0),
+                                                  0.3.m, 3.m, 'left')
+          model.commit_operation
+          assert(res, "muro #{i + 1} non creato")
+          walls << res[:wall]
+          closed = res[:joined_end]
+        end
+        assert(closed, "l'ultimo muro non si è agganciato al primo")
+        lo, hi = BIMSketch::WallJoint.band('left', 0.3)
+        exts = BIMSketch::WallJoint.chain(corners, lo, hi, closed: true)
+        area = corners.each_with_index.sum do |(cx, cy), i|
+          nx, ny = corners[(i + 1) % corners.size]
+          BIMSketch::WallJoint.area(BIMSketch::WallJoint.footprint(Math.hypot(nx - cx, ny - cy), 0.3, exts[i]))
+        end
+        solid = walls.all? { |w| volume_m3(w) }
+        assert(solid, 'un muro con testate oblique non è un solido chiuso')
+        approx(walls.sum { |w| volume_m3(w) }, area * 3, 0.002, 'volume totale')
       end
     end
 

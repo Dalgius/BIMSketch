@@ -13,7 +13,7 @@ dalla geometria reale.
 
 | Area | Cosa fa |
 |---|---|
-| **Modellazione BIM** | Strumenti **Muro** (a catena, con aggancio alle estremità dei muri esistenti e giunti d'angolo automatici, allineamento asse/sinistra/destra, lunghezza da tastiera), **Solaio** (contorno a clic), **Pilastro**, **Trave**, **Porta** e **Finestra** (tagliano il foro passante nel muro e creano l'elemento nel vano) |
+| **Modellazione BIM** | Strumenti **Muro** (a catena, con aggancio alle estremità dei muri esistenti e giunti a quartabuono con qualunque angolo, allineamento asse/sinistra/destra, lunghezza da tastiera), **Solaio** (contorno a clic), **Pilastro**, **Trave**, **Porta** e **Finestra** (tagliano il foro passante nel muro e creano l'elemento nel vano) |
 | **Elemento da faccia** | Crea solai, coperture, fondazioni, rivestimenti o **spazi (locali)** estrudendo le facce selezionate, anche inclinate e con fori |
 | **Classificazione** | Trasforma gruppi, componenti o geometria esistenti in elementi BIM: 14 categorie IFC (IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcDoor, IfcWindow, IfcRoof, IfcStair, IfcRailing, IfcCovering, IfcFooting, IfcFurniture, IfcSpace, IfcBuildingElementProxy) con tipo predefinito, tag SketchUp e materiale di categoria. Se nel modello è caricato uno schema IFC applica anche la classificazione nativa di SketchUp |
 | **Proprietà BIM** | Pannello che segue la selezione: categoria, tipo predefinito, nome, tipologia (ObjectType), livello, materiale, GlobalId, **Pset standard** (Pset_WallCommon, Pset_DoorCommon, …: portante, esterno, REI, trasmittanza U, ecc.), proprietà personalizzate e quantità calcolate. Modifica multipla su più elementi |
@@ -149,8 +149,8 @@ Le icone PNG si rigenerano dalle SVG con
   per altri oggetti usa la classificazione.
 - La geometria IFC è esportata come superficie triangolata (non parametrica); le aperture
   sono già ritagliate nella geometria del muro e non sono esportate come IfcOpeningElement.
-- I giunti d'angolo tra muri sono esatti per angoli retti; con angoli diversi resta un piccolo
-  scarto, perché i muri sono parallelepipedi.
+- I giunti tra muri sono a quartabuono; le giunzioni a T (un muro che arriva a metà di un altro)
+  non sono ancora gestite.
 
 ## Licenza
 

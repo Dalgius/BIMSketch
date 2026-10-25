@@ -60,29 +60,60 @@ module BIMSketch
       model.entities.select { |e| BimData.element?(e) && BimData.level_id(e) == id }
     end
 
-    # Salva i livelli e, se la quota di un livello è cambiata, sposta in verticale
-    # gli elementi che vi appartengono.
+    # Salva i livelli e aggiorna gli elementi:
+    # - se la quota di un livello cambia, i suoi elementi si spostano in verticale;
+    # - muri e pilastri con altezza automatica prendono l'altezza del livello;
+    # - le travi (estradosso sotto il livello superiore) seguono la variazione
+    #   di altezza del livello.
+    # Restituisce i livelli salvati; skipped_last_update indica quanti elementi
+    # non sono stati adattati (modificati a mano o con aperture che non entrano).
     def update(model, new_levels, move_elements: true)
       old = all(model)
+      @skipped = 0
       model.start_operation('BIMSketch: Modifica livelli', true)
       list = save(model, new_levels)
-      if move_elements
-        list.each do |lvl|
-          prev = LevelList.find(old, lvl['id'])
-          next unless prev
-
+      list.each do |lvl|
+        prev = LevelList.find(old, lvl['id'])
+        elements = elements_on(model, lvl['id'])
+        if move_elements && prev
           delta = lvl['elevation'] - prev['elevation']
-          next if delta.abs < 1e-6
+          unless delta.abs < 1e-6
+            tr = Geom::Transformation.translation([0, 0, delta.m])
+            elements.each { |e| e.transform!(tr) }
+          end
+          dh = lvl['height'] - prev['height']
+          unless dh.abs < 1e-6
+            lift = Geom::Transformation.translation([0, 0, dh.m])
+            elements.each do |e|
+              next unless BimData.type_key(e) == 'beam' && e.get_attribute(BimData::DICT, 'auto_top') != false
 
-          tr = Geom::Transformation.translation([0, 0, delta.m])
-          elements_on(model, lvl['id']).each { |e| e.transform!(tr) }
+              e.transform!(lift)
+            end
+          end
         end
+        sync_heights(model, elements, lvl)
       end
       model.commit_operation
       list
     rescue StandardError
       model.abort_operation
       raise
+    end
+
+    def skipped_last_update
+      @skipped.to_i
+    end
+
+    # Porta all'altezza del livello i muri e i pilastri con altezza automatica.
+    def sync_heights(model, elements, lvl)
+      target = lvl['height'].m
+      elements.each do |e|
+        info = Builder.element_height(model, e)
+        next unless info && info[:auto]
+        next if (info[:height] - target).abs < 0.5.mm
+
+        @skipped = @skipped.to_i + 1 unless Builder.set_height(model, e, auto: true)
+      end
     end
 
     # Mostra soltanto gli elementi del livello indicato (nil = mostra tutto).

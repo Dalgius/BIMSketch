@@ -293,12 +293,14 @@ module BIMSketchAutotest
         model.start_operation('Autotest pilastro', true)
         c = BIMSketch::Builder.column(model, pt(8, 0, 0), 0.3.m, 0.3.m, 3.m)
         model.commit_operation
+        @e[:column] = c
         approx(volume_m3(c), 0.27, 0.001, 'volume')
       end
       check('Trave 0,30 x 0,50, estradosso a 3 m') do
         model.start_operation('Autotest trave', true)
         b = BIMSketch::Builder.beam(model, pt(8, 0, 0), pt(8, 4, 0), 0.3.m, 0.5.m, 3.m)
         model.commit_operation
+        @e[:beam] = b
         [approx(volume_m3(b), 4 * 0.15, 0.001, 'volume'),
          approx(b.bounds.max.z.to_m, 3.0, 0.001, 'estradosso')].join(', ')
       end
@@ -319,6 +321,45 @@ module BIMSketchAutotest
         BIMSketch::Levels.update(model, list)
         approx(@e[:slab].bounds.max.z.to_m, 3.2, 0.001, 'estradosso solaio')
       end
+      check('Altezza automatica al cambio altezza del livello') do
+        set_level_height('L0', 3.5)
+        w = @e[:wall]
+        assert(BIMSketch::Levels.skipped_last_update.zero?,
+               "#{BIMSketch::Levels.skipped_last_update} elementi non adattati")
+        [approx(height_m(w), 3.5, 0.001, 'altezza muro'),
+         approx(volume_m3(w), 5 * 0.3 * 3.5 - 0.567 - 0.504, 0.002, 'volume muro con aperture'),
+         approx(height_m(@e[:column]), 3.5, 0.001, 'altezza pilastro'),
+         approx(@e[:beam].bounds.max.z.to_m, 3.5, 0.001, 'estradosso trave')].join(', ')
+      end
+      check('Altezza numerica (non segue più il livello)') do
+        model.start_operation('Autotest altezza', true)
+        ok = BIMSketch::Builder.set_height(model, @e[:column], height: 2.7.m, auto: false)
+        model.commit_operation
+        assert(ok, 'altezza del pilastro non impostata')
+        set_level_height('L0', 3.0)
+        info = BIMSketch::Builder.element_height(model, @e[:column])
+        assert(info[:auto] == false, 'il pilastro risulta ancora automatico')
+        [approx(height_m(@e[:column]), 2.7, 0.001, 'altezza pilastro (fissa)'),
+         approx(height_m(@e[:wall]), 3.0, 0.001, 'altezza muro (automatica)'),
+         approx(@e[:beam].bounds.max.z.to_m, 3.0, 0.001, 'estradosso trave')].join(', ')
+      end
+      check('Altezza troppo bassa per le aperture rifiutata') do
+        model.start_operation('Autotest altezza bassa', true)
+        ok = BIMSketch::Builder.set_height(model, @e[:wall], height: 2.0.m, auto: false)
+        model.commit_operation
+        assert(!ok, 'il muro è stato abbassato sotto la porta')
+        approx(height_m(@e[:wall]), 3.0, 0.001, 'altezza invariata')
+      end
+    end
+
+    def set_level_height(id, height)
+      list = BIMSketch::Levels.all(model).map(&:dup)
+      list.find { |l| l['id'] == id }['height'] = height
+      BIMSketch::Levels.update(model, list)
+    end
+
+    def height_m(entity)
+      (entity.bounds.max.z - entity.bounds.min.z).to_m
     end
 
     def run_classification

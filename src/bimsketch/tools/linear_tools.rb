@@ -48,7 +48,7 @@ module BIMSketch
       def update_ui
         Sketchup.status_text = if @points.empty?
                                  "Muro: clic sul punto iniziale (si aggancia ai muri esistenti). #{level_label}. " \
-                                   'Tasto destro: impostazioni.'
+                                   "#{type_label}Tasto destro: impostazioni."
                                else
                                  'Muro: clic sul punto finale o digita la lunghezza. I muri si ' \
                                    'agganciano alle estremità dei muri esistenti; doppio clic, Invio o Esc per terminare.'
@@ -56,8 +56,14 @@ module BIMSketch
         Sketchup.vcb_label = 'Lunghezza'
       end
 
+      def type_label
+        type = Settings.wall_type(model)
+        type ? "Tipologia: #{type['name']}. " : ''
+      end
+
       def thickness
-        Settings.length('wall_thickness')
+        type = Settings.wall_type(model)
+        type ? WallTypes.thickness(type).m : Settings.length('wall_thickness')
       end
 
       def height
@@ -89,8 +95,10 @@ module BIMSketch
 
         align = Settings.get('wall_align')
         result = run_operation('BIMSketch: Muro') do
+          type = Settings.wall_type(model)
           Builder.wall_connected(model, start, pt, thickness, height, align,
-                                 auto_height: Settings.get('wall_height').to_f <= 0)
+                                 auto_height: Settings.get('wall_height').to_f <= 0,
+                                 type_id: type && type['id'])
         end
         return unless result
 

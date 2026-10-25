@@ -76,19 +76,40 @@ module BIMSketch
 
     # Geometria di un muro parametrico nel suo sistema locale: impronta da
     # WallJoint.footprint (testate anche oblique, per i giunti a quartabuono)
-    # alta height, con le aperture [a, b, c, d]. Il prospetto della faccia
-    # y = 0 (rientranze per le porte, fori per le finestre) viene estruso
-    # fino a y = thickness; poi i vertici delle testate sulla faccia opposta
-    # vengono spostati per inclinare le testate.
-    def build_wall(ents, length, thickness, height, ext, openings)
-      fp = WallJoint.footprint(length.to_f, thickness.to_f, ext)
+    # alta height, con le aperture [a, b, c, d].
+    # layers: fasce degli strati [[y0, y1, nome, materiale SketchUp], ...]:
+    # ogni strato diventa un gruppo annidato con il suo materiale; senza
+    # strati il muro è un unico solido.
+    def build_wall(ents, length, thickness, height, ext, openings, layers: nil)
+      if layers.nil? || layers.empty?
+        build_wall_band(ents, length, thickness, 0.0, thickness, height, ext, openings)
+        return true
+      end
+      layers.each_with_index do |(y0, y1, name, material), i|
+        next if y1 - y0 < TOL * 10
+
+        sub = ents.add_group
+        build_wall_band(sub.entities, length, thickness, y0, y1, height, ext, openings)
+        sub.name = name.to_s
+        sub.material = material if material
+        sub.set_attribute('BIMSketch', 'layer', i)
+      end
+      true
+    end
+
+    # Una fascia y0..y1 del muro: il prospetto della faccia y = y0 (rientranze
+    # per le porte, fori per le finestre) viene estruso fino a y = y1; poi i
+    # vertici delle testate sulla faccia y1 vengono spostati per inclinarle.
+    def build_wall_band(ents, length, thickness, y0, y1, height, ext, openings)
+      be = WallJoint.band_ext(ext, thickness.to_f, y0.to_f, y1.to_f)
+      fp = WallJoint.footprint(length.to_f, (y1 - y0).to_f, be)
       xs0 = fp[0][0]
       xe0 = fp[1][0]
       xe1 = fp[2][0]
       xs1 = fp[3][0]
       eps = TOL * 10
-      outline = WallProfile.outline(xs0, xe0, 0.0, height.to_f, openings, eps).map { |x, z| pt(x, 0, z) }
-      holes = WallProfile.holes(openings, 0.0, eps).map { |h| h.map { |x, z| pt(x, 0, z) } }
+      outline = WallProfile.outline(xs0, xe0, 0.0, height.to_f, openings, eps).map { |x, z| pt(x, y0, z) }
+      holes = WallProfile.holes(openings, 0.0, eps).map { |h| h.map { |x, z| pt(x, y0, z) } }
       face = ents.add_face(outline)
       raise 'impossibile costruire il prospetto del muro' unless face
 
@@ -97,13 +118,13 @@ module BIMSketch
         inner.erase! if inner && inner.valid?
       end
       face.reverse! if face.normal.y > 0
-      face.pushpull(-thickness)
+      face.pushpull(-(y1 - y0))
 
       verts = []
       vecs = []
       ents.grep(Sketchup::Edge).flat_map(&:vertices).uniq.each do |v|
         p = v.position
-        next unless (p.y - thickness).abs < eps
+        next unless (p.y - y1).abs < eps
 
         if (p.x - xs0).abs < eps && (xs1 - xs0).abs > eps
           verts << v
@@ -115,6 +136,25 @@ module BIMSketch
       end
       ents.transform_by_vectors(verts, vecs) unless verts.empty?
       true
+    end
+
+    # Volume di un gruppo/componente nelle coordinate del suo contenitore:
+    # quello di SketchUp se è un solido, altrimenti la somma dei sotto-gruppi
+    # solidi (es. un muro a strati). -1 se non è calcolabile.
+    def solid_volume(entity)
+      v = entity.respond_to?(:volume) ? entity.volume : -1
+      return v if v > 0
+
+      ents = entity.definition.entities
+      return -1 if ents.grep(Sketchup::Face).any?
+
+      kids = ents.select { |e| e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance) }
+      return -1 if kids.empty?
+
+      vols = kids.map { |k| solid_volume(k) }
+      return -1 if vols.any? { |x| x <= 0 }
+
+      vols.sum * scales(entity.transformation).reduce(:*)
     end
   end
 end

@@ -104,6 +104,35 @@
     return html + '</div>';
   }
 
+  // Tipologia (stratigrafia) dei muri.
+  function renderWall(w, multi, types) {
+    var opts = (types || (w && w.types) || []).map(function (t) { return { value: t.id, label: t.name + ' (' + t.summary + ')' }; });
+    var html = '<h2>Stratigrafia</h2><div class="panel">';
+    if (multi) {
+      html += row('Tipologia', '<select id="f_wall_type_id"><option value="(invariato)">(invariato)</option>' +
+        '<option value="">(nessuna: muro unico)</option>' + options(opts, '') + '</select>') +
+        row('Strati invertiti', '<select id="f_wall_flipped">' +
+          options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No' }], '', '(invariato)') + '</select>');
+      return html + '</div>';
+    }
+    html += row('Tipologia', '<select id="f_wall_type_id">' + options(opts, w.type_id, '(nessuna: muro unico)') + '</select>') +
+      row('Strati invertiti', '<input type="checkbox" id="f_wall_flipped"' + (w.flipped ? ' checked' : '') + '>');
+    if (w.layers.length) {
+      html += '<table style="margin-top:6px"><thead><tr><th>Strato</th><th>Materiale</th><th class="num">cm</th><th class="num">λ</th></tr></thead><tbody>';
+      w.layers.forEach(function (l) {
+        html += '<tr><td>' + BIM.esc(l.name) + '</td><td>' + BIM.esc(l.material) + '</td><td class="num">' +
+          BIM.num(l.thickness * 100, 1) + '</td><td class="num">' + (l.lambda ? BIM.num(l.lambda, 3) : '—') + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      html += '<div style="margin-top:6px"><b>Spessore ' + BIM.num(w.thickness, 1) + ' cm · U = ' +
+        (w.u === null || w.u === undefined ? '— (manca λ)' : BIM.num(w.u, 3) + ' W/m²K') + '</b></div>';
+    } else {
+      html += '<div class="muted">Muro senza stratigrafia (spessore ' + BIM.num(w.thickness, 1) + ' cm).</div>';
+    }
+    html += '<div class="toolbar"><button class="small" id="wallTypesBtn">Gestisci tipologie…</button></div>';
+    return html + '</div>';
+  }
+
   function renderSingle() {
     var e = state.element;
     var html = '<h1>' + BIM.esc(e.name || (typeByKey(e.type) || {}).label || 'Elemento') + '</h1>';
@@ -117,6 +146,7 @@
       row('IFC GlobalId', '<input readonly value="' + BIM.esc(e.guid) + '">') +
       '</div>';
     html += renderDims(e.dims, false);
+    if (e.wall) html += renderWall(e.wall, false);
     html += '<div id="propsBox">' + renderProps(e.type, e.props, false) + '</div>';
     html += renderCustom(e.custom);
     html += '<h2>Quantità</h2><div class="panel">';
@@ -141,6 +171,7 @@
       row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="(invariato)">') +
       row('Materiale BIM', '<input id="f_material" placeholder="(invariato)">') + '</div>';
     html += renderDims(state.dims ? {} : null, true);
+    if (state.wall_types) html += renderWall(null, true, state.wall_types);
     html += '<div id="propsBox">' + (state.common_type ? renderProps(state.common_type, {}, true) : '') + '</div>';
     html += '<div class="toolbar"><button class="primary" id="save">Applica a tutti</button>' +
       '<button id="refresh">Aggiorna</button></div>';
@@ -175,6 +206,12 @@
       if (!(multi && v === '')) props[n.getAttribute('data-prop')] = v;
     }
     el.props = props;
+    var wt = BIM.$('f_wall_type_id');
+    if (wt) {
+      el.wall_type_id = wt.value;
+      var fl = BIM.$('f_wall_flipped');
+      el.wall_flipped = fl.type === 'checkbox' ? fl.checked : fl.value;
+    }
     var auto = BIM.$('f_auto_height');
     if (auto) {
       el.auto_height = auto.type === 'checkbox' ? auto.checked : auto.value;
@@ -201,6 +238,7 @@
     });
     on('classify', 'click', function () { BIM.call('classify', { type: BIM.$('classType').value }); });
     on('levelsBtn', 'click', function () { BIM.call('levels'); });
+    on('wallTypesBtn', 'click', function () { BIM.call('wall_types'); });
     on('f_auto_height', 'change', function () {
       var a = BIM.$('f_auto_height');
       if (a.type === 'checkbox') BIM.$('f_height').disabled = a.checked;

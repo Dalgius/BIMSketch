@@ -258,6 +258,23 @@ module BIMSketch
       path
     end
 
+    def export_takeoff_csv
+      m = model
+      rows = Records.material_takeoff(Collector.collect(m))
+      if rows.empty?
+        UI.messagebox('Nessun muro con stratigrafia nel modello: assegna una tipologia ai muri.')
+        return
+      end
+      title = m.title.to_s.empty? ? 'modello' : m.title
+      path = UI.savepanel('Esporta computo materiali (CSV)', nil, "#{title}_materiali.csv")
+      return unless path
+
+      path += '.csv' unless path.downcase.end_with?('.csv')
+      File.open(path, 'wb') { |f| f.write(Records.takeoff_csv(rows).encode('UTF-8')) }
+      UI.messagebox("Computo materiali esportato: #{rows.size} materiali.\n#{path}")
+      path
+    end
+
     def select_guids(guids)
       m = model
       wanted = guids.each_with_object({}) { |g, h| h[g] = true }

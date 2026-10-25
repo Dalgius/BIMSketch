@@ -49,7 +49,7 @@ module BIMSketchAutotest
     end
 
     def volume_m3(entity)
-      v = entity.volume
+      v = BIMSketch::Geometry.respond_to?(:solid_volume) ? BIMSketch::Geometry.solid_volume(entity) : entity.volume
       v > 0 ? v * IN3_TO_M3 : nil
     end
 
@@ -99,6 +99,7 @@ module BIMSketchAutotest
       run_openings
       run_other_elements
       run_classification
+      run_wall_types
       run_data_and_export
       run_ui
       report
@@ -362,6 +363,102 @@ module BIMSketchAutotest
       (entity.bounds.max.z - entity.bounds.min.z).to_m
     end
 
+    def layers_of(wall)
+      wall.definition.entities.select { |e| e.is_a?(Sketchup::Group) && e.get_attribute('BIMSketch', 'layer') }
+    end
+
+    def ring_volume(t, h)
+      ((5 + t) * (4 + t) - (5 - t) * (4 - t)) * h
+    end
+
+    def run_wall_types
+      puts "\n[Stratigrafie]"
+      lib = BIMSketch::WallTypeLibrary
+      check('Libreria tipologie') do
+        types = lib.all(model)
+        model.start_operation('Autotest libreria', true)
+        lib.save(model, types)
+        model.commit_operation
+        t = lib.find(model, 'WT1')
+        assert(t, 'tipologia WT1 mancante')
+        "#{lib.all(model).size} tipologie, WT1 = #{BIMSketch::WallTypes.summary(t)}"
+      end
+      check('Muro con stratigrafia (WT1, 42,5 cm)') do
+        model.start_operation('Autotest muro a strati', true)
+        w = BIMSketch::Builder.wall(model, pt(0, 60, 0), pt(5, 60, 0), 0.3.m, 3.m, 'center', type_id: 'WT1')
+        model.commit_operation
+        @e[:layered] = w
+        layers = layers_of(w)
+        assert(layers.size == 4, "strati creati: #{layers.size}")
+        assert(layers.all? { |l| l.volume > 0 }, 'uno strato non è un solido')
+        t = lib.find(model, 'WT1')
+        u = BIMSketch::WallTypes.u_value(t, external: false)
+        props = BIMSketch::BimData.json_attr(w, 'props')
+        assert((props['ThermalTransmittance'].to_f - u).abs < 1e-3, "U nel Pset: #{props['ThermalTransmittance']}")
+        assert(BIMSketch::BimData.read(w)['object_type'] == t['name'], 'tipologia non scritta come ObjectType')
+        [approx(volume_m3(w), 5 * 0.425 * 3, 0.002, 'volume'),
+         approx(volume_m3(layers.max_by { |l| l.volume }), 5 * 0.30 * 3, 0.002, 'volume muratura'),
+         format('U %.3f W/m²K', u)].join(', ')
+      end
+      check('Porta in muro a strati (taglia tutti gli strati)') do
+        w = @e[:layered]
+        model.start_operation('Autotest porta strati', true)
+        d = BIMSketch::Builder.opening(model, w, 'door', 2.5.m, 0.9.m, 2.1.m, 0)
+        model.commit_operation
+        assert(d, 'porta non creata')
+        assert(layers_of(w).all? { |l| l.volume > 0 }, 'uno strato non è più un solido')
+        approx(volume_m3(w), 5 * 0.425 * 3 - 0.9 * 2.1 * 0.425, 0.002, 'volume')
+      end
+      check('Anello 5 x 4 a strati (WT2) con quartabuono') do
+        pts = [pt(20, 70, 0), pt(25, 70, 0), pt(25, 74, 0), pt(20, 74, 0)]
+        model.start_operation('Autotest anello strati', true)
+        walls = BIMSketch::Builder.wall_chain(model, pts, 0.3.m, 3.m, 'center', closed: true, type_id: 'WT2')
+        model.commit_operation
+        @e[:ring] = walls
+        assert(walls.all? { |w| layers_of(w).size == 3 }, 'strati mancanti')
+        approx(walls.sum { |w| volume_m3(w) || 0 }, ring_volume(0.33, 3), 0.002, 'volume totale')
+      end
+      check('Modifica della tipologia aggiorna muri e giunti') do
+        types = lib.all(model)
+        wt2 = types.find { |t| t['id'] == 'WT2' }
+        wt2['layers'][1]['thickness'] = 0.20
+        model.start_operation('Autotest modifica tipologia', true)
+        lib.save(model, types)
+        failed = BIMSketch::Builder.update_type_walls(model, 'WT2')
+        model.commit_operation
+        assert(failed.zero?, "#{failed} muri non aggiornati")
+        walls = @e[:ring]
+        assert(walls.all?(&:valid?), 'un muro è stato cancellato')
+        approx(walls.sum { |w| volume_m3(w) || 0 }, ring_volume(0.23, 3), 0.002, 'volume totale (23 cm)')
+      end
+      check('Cambio tipologia di un singolo muro') do
+        w = @e[:ring].first
+        model.start_operation('Autotest cambio tipologia', true)
+        ok = BIMSketch::Builder.apply_wall_type(model, w, 'WT3')
+        model.commit_operation
+        assert(ok, 'tipologia non applicata')
+        g = BIMSketch::Builder.wall_geom(w)
+        assert(@e[:ring].all? { |x| volume_m3(x) }, 'un muro dell\'anello non è più solido')
+        approx(g[:thickness].to_m, 0.11, 0.0005, 'spessore')
+      end
+      check('Stratigrafia nell\'IFC e nel computo materiali') do
+        records = BIMSketch::Collector.collect(model, mesh: true)
+        rec = records.find { |r| r[:entity] == @e[:layered] }
+        assert(rec[:layers] && rec[:layers].size == 4, 'strati non raccolti')
+        assert(rec[:mesh_parts] && rec[:mesh_parts].size == 4, 'geometria per strato mancante')
+        levels = BIMSketch::Levels.all(model)
+        w = BIMSketch::IfcWriter.new(project_name: 'Autotest')
+        levels.each { |l| w.add_storey(id: l['id'], name: l['name'], elevation: l['elevation']) }
+        records.each { |r| w.add_element(BIMSketch::Records.to_ifc_element(r, levels)) }
+        text = w.to_s
+        assert(text.include?('=IFCMATERIALLAYERSET('), 'IfcMaterialLayerSet mancante')
+        takeoff = BIMSketch::Records.material_takeoff(records)
+        eps = takeoff.find { |r| r['material'] == 'EPS con grafite' }
+        assert(eps, 'materiale isolante assente dal computo')
+        "#{text.scan('=IFCMATERIALLAYERSET(').size} stratigrafie IFC, isolante #{format('%.3f', eps['volume'])} m³"
+      end
+    end
+
     def run_classification
       puts "\n[Classificazione e proprietà]"
       check('Classifica un gruppo esistente come Arredo') do
@@ -436,7 +533,8 @@ module BIMSketchAutotest
           assert(text.include?("=#{t}("), "#{t} mancante nel file")
         end
         sets = text.scan('=IFCTRIANGULATEDFACESET(').size
-        assert(sets == records.size, "#{sets} geometrie per #{records.size} elementi")
+        expected = records.sum { |r| r[:mesh_parts] ? r[:mesh_parts].size : 1 }
+        assert(sets == expected, "#{sets} geometrie invece di #{expected}")
         "#{(File.size(path) / 1024.0).round(1)} KB → #{path}"
       end
     end

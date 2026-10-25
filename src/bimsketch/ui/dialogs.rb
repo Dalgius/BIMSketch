@@ -144,6 +144,7 @@ module BIMSketch
           keys = elements.map { |e| BimData.type_key(e) }.uniq
           data['common_type'] = keys.size == 1 ? keys.first : nil
           data['dims'] = elements.any? { |e| Builder.element_height(model, e) }
+          data['wall_types'] = wall_types_payload if elements.any? { |e| Builder.parametric_wall?(e) }
           data['summary'] = elements.group_by { |e| BimData.type(e) }.map do |t, es|
             { 'label' => t ? t.plural : '?', 'count' => es.size }
           end
@@ -167,7 +168,8 @@ module BIMSketch
             refresh
           },
           'refresh' => ->(_d) { refresh },
-          'levels' => ->(_d) { BIMSketch.levels_dialog.show }
+          'levels' => ->(_d) { BIMSketch.levels_dialog.show },
+          'wall_types' => ->(_d) { BIMSketch.wall_types_dialog.show }
         }
       end
 
@@ -194,6 +196,18 @@ module BIMSketch
         data['solid'] = rec[:solid]
         info = Builder.element_height(model, entity)
         data['dims'] = { 'height' => info[:height].to_m.round(4), 'auto' => info[:auto] } if info
+        if Builder.parametric_wall?(entity)
+          g = Builder.wall_geom(entity)
+          type = Builder.wall_type(model, entity)
+          external = BimData.json_attr(entity, 'props')['IsExternal'] == true
+          data['wall'] = {
+            'type_id' => type ? type['id'] : '', 'flipped' => g ? g[:flipped] : false,
+            'types' => wall_types_payload,
+            'layers' => type ? type['layers'] : [],
+            'u' => type ? WallTypes.u_value(type, external: external) : nil,
+            'thickness' => g ? (g[:thickness].to_m * 100).round(2) : nil
+          }
+        end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
       end
@@ -226,6 +240,35 @@ module BIMSketch
         Builder.set_height(model, entity, height: target, auto: false)
       end
 
+      def wall_types_payload
+        WallTypeLibrary.all(model).map do |t|
+          { 'id' => t['id'], 'name' => t['name'], 'summary' => WallTypes.summary(t) }
+        end
+      end
+
+      # Tipologia e verso degli strati (campi 'wall_type_id' e 'wall_flipped');
+      # ricalcola comunque la trasmittanza (può cambiare con "Esterno").
+      def apply_wall_type(entity, el)
+        return true unless Builder.parametric_wall?(entity)
+
+        ok = true
+        g = Builder.wall_geom(entity)
+        if el.key?('wall_type_id') && !el['wall_type_id'].nil? && g
+          id = el['wall_type_id'].to_s
+          flipped = case el['wall_flipped']
+                    when true, 'true' then true
+                    when false, 'false' then false
+                    else g[:flipped]
+                    end
+          unless id == '(invariato)' || (id == g[:type_id].to_s && flipped == g[:flipped])
+            ok = Builder.apply_wall_type(model, entity, id.empty? ? nil : id, flipped: flipped)
+          end
+        end
+        type = Builder.wall_type(model, entity)
+        Builder.apply_type_data(model, entity, type) if type
+        ok
+      end
+
       def save(data)
         elements = model.selection.select { |e| BimData.element?(e) }
         return if elements.empty?
@@ -235,6 +278,7 @@ module BIMSketch
         if data['mode'] == 'single'
           BimData.write(elements.first, data['element'] || {})
           failed += 1 unless apply_height(elements.first, data['element'] || {})
+          failed += 1 unless apply_wall_type(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
@@ -246,14 +290,15 @@ module BIMSketch
             patch['props'] = BimData.json_attr(e, 'props').merge(props) unless props.empty?
             BimData.write(e, patch)
             failed += 1 unless apply_height(e, changes)
+            failed += 1 unless apply_wall_type(e, changes)
           end
         end
         model.commit_operation
         refresh
         push('saved', true)
         if failed.positive?
-          ::UI.messagebox("Altezza non modificata per #{failed} elementi: sono stati modificati a mano " \
-                          "oppure le loro aperture non entrerebbero nella nuova altezza.")
+          ::UI.messagebox("#{failed} modifiche di altezza o tipologia non applicate: gli elementi sono stati " \
+                          'modificati a mano oppure le loro aperture non entrerebbero.')
         end
       rescue StandardError
         model.abort_operation
@@ -329,6 +374,83 @@ module BIMSketch
       end
     end
 
+    # Libreria delle tipologie di muro (stratigrafie).
+    class WallTypesManager < Base
+      def initialize
+        super('BIMSketch - Tipologie muro', 'wall_types', 820, 560)
+      end
+
+      def refresh
+        types = WallTypeLibrary.all(model)
+        usage = Hash.new(0)
+        model.active_entities.each do |e|
+          next unless Builder.parametric_wall?(e)
+
+          g = Builder.wall_geom(e)
+          usage[g[:type_id]] += 1 if g && g[:type_id]
+        end
+        selected = model.selection.count { |e| Builder.parametric_wall?(e) }
+        push('render', 'types' => types, 'usage' => usage, 'selected' => selected,
+                       'functions' => WallTypes::FUNCTIONS, 'rsi' => WallTypes::RSI, 'rse' => WallTypes::RSE)
+      end
+
+      protected
+
+      def callbacks
+        {
+          'save' => ->(d) { save(d['types']) },
+          'assign' => ->(d) { assign(d['id'], d['flipped'] == true) },
+          'refresh' => ->(_d) { refresh }
+        }
+      end
+
+      def save(types)
+        old = WallTypeLibrary.all(model)
+        model.start_operation('BIMSketch: Tipologie muro', true)
+        list = WallTypeLibrary.save(model, types)
+        failed = 0
+        list.each do |t|
+          before = WallTypes.find(old, t['id'])
+          next if before.nil? || JSON.generate(before) == JSON.generate(t)
+
+          failed += Builder.update_type_walls(model, t['id'])
+        end
+        (old.map { |t| t['id'] } - list.map { |t| t['id'] }).each do |id|
+          failed += Builder.update_type_walls(model, id, remove: true)
+        end
+        model.commit_operation
+        refresh
+        push('saved', true)
+        report(failed)
+      rescue StandardError
+        model.abort_operation
+        raise
+      end
+
+      def assign(id, flipped)
+        walls = model.selection.select { |e| Builder.parametric_wall?(e) }
+        if walls.empty?
+          ::UI.messagebox('Seleziona uno o più muri BIMSketch.')
+          return
+        end
+        model.start_operation('BIMSketch: Assegna tipologia', true)
+        failed = walls.count { |w| !Builder.apply_wall_type(model, w, id, flipped: flipped) }
+        model.commit_operation
+        refresh
+        report(failed)
+      rescue StandardError
+        model.abort_operation
+        raise
+      end
+
+      def report(failed)
+        return unless failed.positive?
+
+        ::UI.messagebox("#{failed} muri non sono stati aggiornati: sono stati modificati a mano " \
+                        'oppure le loro aperture non entrerebbero.')
+      end
+    end
+
     # Abaco delle quantità.
     class Schedule < Base
       def initialize
@@ -336,9 +458,10 @@ module BIMSketch
       end
 
       def refresh
-        rows = Records.schedule_rows(Collector.collect(model), Levels.all(model))
+        records = Collector.collect(model)
+        rows = Records.schedule_rows(records, Levels.all(model))
         push('render', 'rows' => rows, 'totals' => Records.totals(rows),
-                       'levels' => levels_payload)
+                       'levels' => levels_payload, 'takeoff' => Records.material_takeoff(records))
       end
 
       protected
@@ -347,6 +470,7 @@ module BIMSketch
         {
           'select' => ->(d) { Commands.select_guids(Array(d['guids'])) },
           'export_csv' => ->(_d) { Commands.export_schedule_csv },
+          'export_takeoff' => ->(_d) { Commands.export_takeoff_csv },
           'refresh' => ->(_d) { refresh }
         }
       end

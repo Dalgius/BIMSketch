@@ -159,6 +159,20 @@ class RecordsTest < Minitest::Test
     assert_equal 'L0', el[:storey_id]
   end
 
+  def test_material_takeoff
+    rec = Fixtures.wall_record.merge(
+      layers: [{ name: 'Intonaco', material: 'Intonaco', thickness: 0.015 },
+               { name: 'Muratura', material: 'Laterizio', thickness: 0.3 },
+               { name: 'Intonaco', material: 'Intonaco', thickness: 0.015 }]
+    )
+    rows = R.material_takeoff([rec, Fixtures.wall_record])
+    intonaco = rows.find { |r| r['material'] == 'Intonaco' }
+    assert_in_delta 30.0, intonaco['area'] # two faces of a 15 m² wall
+    assert_in_delta 0.45, intonaco['volume'], 1e-9
+    assert_in_delta 4.5, rows.find { |r| r['material'] == 'Laterizio' }['volume'], 1e-9
+    assert_includes R.takeoff_csv(rows), '0,4500'
+  end
+
   def test_checker
     a = Fixtures.wall_record
     b = Fixtures.wall_record(guid: a[:guid], level: 'missing')

@@ -17,7 +17,8 @@ class IfcWriterTest < Minitest::Test
     'IFCPRODUCTDEFINITIONSHAPE' => 3, 'IFCPROPERTYSET' => 5, 'IFCPROPERTYSINGLEVALUE' => 4,
     'IFCRELDEFINESBYPROPERTIES' => 6, 'IFCELEMENTQUANTITY' => 6, 'IFCQUANTITYLENGTH' => 5,
     'IFCQUANTITYAREA' => 5, 'IFCQUANTITYVOLUME' => 5, 'IFCRELCONTAINEDINSPATIALSTRUCTURE' => 6,
-    'IFCMATERIAL' => 3, 'IFCRELASSOCIATESMATERIAL' => 6, 'IFCSLAB' => 9
+    'IFCMATERIAL' => 3, 'IFCRELASSOCIATESMATERIAL' => 6, 'IFCSLAB' => 9,
+    'IFCMATERIALLAYER' => 7, 'IFCMATERIALLAYERSET' => 3
   }.freeze
 
   def build
@@ -37,7 +38,14 @@ class IfcWriterTest < Minitest::Test
                                       mesh: Fixtures.box_mesh([0, 0, 2.75], 5, 4, 0.25))
     space = Fixtures.wall_record.merge(type: 'space', name: 'Soggiorno', predefined: 'INTERNAL',
                                        material: nil, alpha: 0.25)
-    [wall, door, slab, space].each do |r|
+    layered = Fixtures.wall_record.merge(
+      name: 'Muro stratificato', layer_set_name: 'Muro esterno',
+      layers: [{ name: 'Cappotto', material: 'EPS', thickness: 0.1, function: 'insulation' },
+               { name: 'Muratura', material: 'Laterizio', thickness: 0.3, function: 'structure' }],
+      mesh_parts: [{ mesh: Fixtures.box_mesh([0, 5, 0], 5, 0.1, 3), color: [244, 214, 110], alpha: 1.0 },
+                   { mesh: Fixtures.box_mesh([0, 5.1, 0], 5, 0.3, 3), color: [190, 110, 80], alpha: 1.0 }]
+    )
+    [wall, door, slab, space, layered].each do |r|
       w.add_element(BIMSketch::Records.to_ifc_element(r, levels))
     end
     w.to_s
@@ -111,6 +119,17 @@ class IfcWriterTest < Minitest::Test
 
       assert_equal ARITY[type], split_args(args).size, "#{type}(#{args})"
     end
+  end
+
+  def test_layer_set_and_parts
+    text = build
+    assert_includes text, "IFCMATERIALLAYERSET("
+    assert_includes text, "'Muro esterno'"
+    assert_equal 2, text.scan('=IFCMATERIALLAYER(').size
+    # Laterizio is both a plain material and a layer material: one IfcMaterial.
+    assert_equal 1, text.scan("=IFCMATERIAL('Laterizio'").size
+    # 4 elements with one mesh + 1 element with two parts.
+    assert_equal 6, text.scan('=IFCTRIANGULATEDFACESET(').size
   end
 
   def test_content

@@ -7,8 +7,8 @@ module BIMSketch
   ROOT = File.dirname(__FILE__)
 
   %w[core/element_types core/quantities core/guid core/level_list core/step
-     core/ifc_writer core/records core/wall_profile core/wall_joint
-     model/settings model/levels model/bim_data model/geometry model/builder model/collector
+     core/ifc_writer core/records core/wall_profile core/wall_joint core/wall_types
+     model/settings model/levels model/bim_data model/wall_type_library model/geometry model/builder model/collector
      tools/base_tool tools/linear_tools tools/opening_tool
      commands ui/dialogs].each { |f| require File.join(ROOT, f) }
 
@@ -20,6 +20,10 @@ module BIMSketch
 
   def levels_dialog
     @levels_dialog ||= Dialogs::LevelsManager.new
+  end
+
+  def wall_types_dialog
+    @wall_types_dialog ||= Dialogs::WallTypesManager.new
   end
 
   def schedule_dialog
@@ -88,6 +92,9 @@ module BIMSketch
       levels: command('Livelli', 'levels', 'Gestisce i livelli (piani) dell\'edificio.') {
         levels_dialog.show
       },
+      wall_types: command('Tipologie muro', 'layers', 'Stratigrafie dei muri: strati, materiali, spessori e trasmittanza U.') {
+        wall_types_dialog.show
+      },
       schedule: command('Abaco quantità', 'schedule', 'Abaco delle quantità degli elementi BIM.') {
         schedule_dialog.show
       },
@@ -124,7 +131,7 @@ module BIMSketch
     model_menu = menu.add_submenu('Modellazione')
     %i[wall slab column beam door window from_face].each { |k| model_menu.add_item(c[k]) }
     menu.add_separator
-    %i[classify properties levels].each { |k| menu.add_item(c[k]) }
+    %i[classify properties levels wall_types].each { |k| menu.add_item(c[k]) }
     menu.add_separator
     %i[schedule checker ifc csv].each { |k| menu.add_item(c[k]) }
     menu.add_separator
@@ -136,7 +143,7 @@ module BIMSketch
     tb = ::UI::Toolbar.new(EXTENSION_NAME)
     %i[wall slab column beam door window from_face].each { |k| tb.add_item(c[k]) }
     tb.add_separator
-    %i[classify properties levels].each { |k| tb.add_item(c[k]) }
+    %i[classify properties levels wall_types].each { |k| tb.add_item(c[k]) }
     tb.add_separator
     %i[schedule checker ifc settings].each { |k| tb.add_item(c[k]) }
     tb.restore

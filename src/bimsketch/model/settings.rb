@@ -6,7 +6,7 @@ module BIMSketch
     SECTION = 'BIMSketch'
 
     DEFAULTS = {
-      'wall_thickness' => 300, 'wall_height' => 0, 'wall_align' => 'center',
+      'wall_thickness' => 300, 'wall_height' => 0, 'wall_align' => 'center', 'wall_type' => '',
       'slab_thickness' => 250,
       'column_width' => 300, 'column_depth' => 300,
       'beam_width' => 300, 'beam_height' => 500,
@@ -31,6 +31,11 @@ module BIMSketch
       get(key).to_f.mm
     end
 
+    # Tipologia di muro predefinita per lo strumento Muro (nil = spessore libero).
+    def wall_type(model = Sketchup.active_model)
+      WallTypeLibrary.find(model, get('wall_type'))
+    end
+
     def edit
       fields = [
         ['wall_thickness', 'Muro: spessore (mm)'],
@@ -46,12 +51,19 @@ module BIMSketch
         ['window_height', 'Finestra: altezza (mm)'],
         ['window_sill', 'Finestra: altezza davanzale (mm)']
       ]
-      prompts = ['Muro: allineamento'] + fields.map(&:last)
-      defaults = [ALIGN_LABELS[get('wall_align')] || 'Asse'] + fields.map { |k, _| get(k).to_s }
-      lists = [ALIGN_LABELS.values.join('|')] + Array.new(fields.size, '')
+      none = '(nessuna: spessore libero)'
+      types = WallTypeLibrary.all(Sketchup.active_model)
+      current = WallTypes.find(types, get('wall_type'))
+      prompts = ['Muro: tipologia (stratigrafia)', 'Muro: allineamento'] + fields.map(&:last)
+      defaults = [current ? current['name'] : none, ALIGN_LABELS[get('wall_align')] || 'Asse'] +
+                 fields.map { |k, _| get(k).to_s }
+      lists = [([none] + types.map { |t| t['name'] }).join('|'), ALIGN_LABELS.values.join('|')] +
+              Array.new(fields.size, '')
       result = UI.inputbox(prompts, defaults, lists, 'BIMSketch - Impostazioni elementi')
       return false unless result
 
+      chosen = types.find { |t| t['name'] == result.shift }
+      set('wall_type', chosen ? chosen['id'] : '')
       set('wall_align', ALIGN_LABELS.key(result.shift) || 'center')
       fields.each_with_index do |(key, _), i|
         v = result[i].to_s.tr(',', '.').to_f

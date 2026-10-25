@@ -112,6 +112,17 @@ module BIMSketch
       [[-e[0], 0.0], [length + e[2], 0.0], [length + e[3], thickness], [-e[1], thickness]]
     end
 
+    # Prolungamenti della fascia y0..y1 (0 <= y0 < y1 <= thickness) di un muro:
+    # le testate oblique sono segmenti, quindi i valori si interpolano.
+    def band_ext(ext, thickness, y0, y1)
+      e = normalize_ext(ext)
+      t = thickness.to_f
+      f0 = t.positive? ? y0 / t : 0.0
+      f1 = t.positive? ? y1 / t : 1.0
+      [e[0] + (e[1] - e[0]) * f0, e[0] + (e[1] - e[0]) * f1,
+       e[2] + (e[3] - e[2]) * f0, e[2] + (e[3] - e[2]) * f1]
+    end
+
     # Tratto centrale del muro (stesso x su entrambe le facce): dove possono
     # stare porte e finestre. Restituisce [x_min, x_max].
     def core_range(length, ext)

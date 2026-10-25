@@ -22,6 +22,14 @@
     <th class="num">Superficie (m²)</th><th class="num">Volume (m³)</th></tr></thead>
   <tbody id="totals"></tbody>
 </table></div>
+<div id="takeoffBox" style="display:none">
+<h2>Computo materiali (dagli strati dei muri)</h2>
+<div class="panel"><table>
+  <thead><tr><th>Materiale</th><th class="num">Superficie (m²)</th><th class="num">Volume (m³)</th><th class="num">Strati</th></tr></thead>
+  <tbody id="takeoff"></tbody>
+</table>
+<div class="toolbar"><button id="takeoffCsv">Esporta computo CSV…</button></div></div>
+</div>
 <h2>Elementi <span class="muted" id="countInfo"></span></h2>
 <div class="panel scroll"><table>
   <thead><tr><th>Categoria</th><th>Nome</th><th>Tipologia</th><th>Livello</th><th>Materiale</th>
@@ -72,6 +80,12 @@
     });
     BIM.$('rows').innerHTML = html;
     BIM.$('countInfo').textContent = '(' + rows.length + ' di ' + data.rows.length + ')';
+    var tk = data.takeoff || [];
+    BIM.$('takeoffBox').style.display = tk.length ? 'block' : 'none';
+    BIM.$('takeoff').innerHTML = tk.map(function (r) {
+      return '<tr><td>' + BIM.esc(r.material) + '</td><td class="num">' + BIM.num(r.area) + '</td><td class="num">' +
+        BIM.num(r.volume, 3) + '</td><td class="num">' + r.elements + '</td></tr>';
+    }).join('');
   }
 
   BIM.render = function (d) {
@@ -93,6 +107,7 @@
   BIM.$('fText').addEventListener('input', draw);
   BIM.$('refresh').addEventListener('click', function () { BIM.call('refresh'); });
   BIM.$('csv').addEventListener('click', function () { BIM.call('export_csv'); });
+  BIM.$('takeoffCsv').addEventListener('click', function () { BIM.call('export_takeoff'); });
   BIM.$('rows').addEventListener('click', function (ev) {
     var tr = ev.target.closest('tr[data-guid]');
     if (tr) BIM.call('select', { guids: [tr.getAttribute('data-guid')] });

@@ -97,7 +97,7 @@ module BIMSketch
       type = ElementTypes[data['type']] || ElementTypes['proxy']
       color = mat ? [mat.color.red, mat.color.green, mat.color.blue] : type.color
       alpha = mat ? mat.alpha.to_f : type.alpha
-      volume = entity.respond_to?(:volume) ? entity.volume : -1
+      volume = Geometry.solid_volume(entity)
       name = entity.name.to_s
       name = defn.name.to_s if name.empty? && entity.is_a?(Sketchup::ComponentInstance)
       rec = {
@@ -119,8 +119,39 @@ module BIMSketch
         z_min: world_bounds_min_z(defn, world),
         measures: measures(defn, world, volume)
       }
-      rec[:mesh] = mesh(defn, world) if with_mesh
+      add_layers(model, entity, rec) if rec[:type] == 'wall'
+      if with_mesh
+        rec[:mesh] = mesh(defn, world)
+        parts = layer_children(defn)
+        unless parts.empty?
+          rec[:mesh_parts] = parts.map do |child|
+            m = child.material
+            { mesh: mesh(child.definition, world * child.transformation),
+              color: m ? [m.color.red, m.color.green, m.color.blue] : color, alpha: m ? m.alpha.to_f : alpha }
+          end
+        end
+      end
       rec
+    end
+
+    # Stratigrafia del muro (dalla sua tipologia) per abaco e IFC.
+    def add_layers(model, entity, rec)
+      return unless Builder.parametric_wall?(entity)
+
+      type = Builder.wall_type(model, entity)
+      return unless type
+
+      rec[:layer_set_name] = type['name']
+      rec[:layers] = type['layers'].map do |l|
+        { name: l['name'], material: l['material'], thickness: l['thickness'].to_f, function: l['function'] }
+      end
+    end
+
+    # Sotto-gruppi che rappresentano gli strati di un muro.
+    def layer_children(defn)
+      defn.entities.select do |e|
+        BimData.instance?(e) && !e.get_attribute(BimData::DICT, 'layer').nil?
+      end
     end
 
     def world_bounds_min_z(defn, world)
@@ -135,11 +166,15 @@ module BIMSketch
       bb = defn.bounds
       areas = Hash.new(0.0)
       perimeter = [0.0, 0.0] # [area faccia superiore maggiore, suo perimetro]
+      layered = !layer_children(defn).empty?
       each_face(defn.entities, Geom::Transformation.new) do |face, local|
         area = face.area(world * local).to_f * IN2_TO_M2
         n = face.normal.transform(local)
         n.normalize! if n.length > 0
         bucket = axis_bucket(n)
+        # Muri a strati: le facce di contatto tra gli strati non sono superfici del muro.
+        next if layered && %w[py ny].include?(bucket) && !outer_face?(face, local, bb, bucket)
+
         areas[bucket] += area
         if bucket == 'pz' && area > perimeter[0]
           len = face.outer_loop.edges.sum { |e| e.length.to_f * edge_scale(e, world * local) }
@@ -154,6 +189,12 @@ module BIMSketch
         perimeter: perimeter[1] > 0 ? perimeter[1] : nil,
         areas: areas
       }
+    end
+
+    def outer_face?(face, local, bb, bucket)
+      y = face.vertices.first.position.transform(local).y
+      target = bucket == 'py' ? bb.max.y : bb.min.y
+      (y - target).abs < 1.mm
     end
 
     def edge_scale(edge, tr)

@@ -4,6 +4,7 @@ require_relative 'element_types'
 require_relative 'quantities'
 require_relative 'level_list'
 require_relative 'guid'
+require_relative 'wall_types'
 
 module BIMSketch
   # Operazioni pure sui "record" degli elementi BIM raccolti dal modello.
@@ -13,6 +14,8 @@ module BIMSketch
   #   props: { 'LoadBearing' => true, ... }, custom: { 'Codice' => 'A1', ... },
   #   measures: (vedi Quantities), mesh: { points:, triangles: } (opzionale),
   #   color: [r,g,b] 0-255, alpha: 0..1, host:, solid:, tag:, z_min: (m)
+  #   layers: [{ name:, material:, thickness: (m), function: }] (stratigrafia, facoltativa),
+  #   layer_set_name:, mesh_parts: [{ mesh:, color:, alpha: }] (geometria per strato)
   module Records
     CUSTOM_PSET = 'BIMSketch_Proprieta'
 
@@ -63,6 +66,19 @@ module BIMSketch
         material: rec[:material], color: color, transparency: 1.0 - (rec[:alpha] || 1.0).to_f,
         mesh: rec[:mesh], psets: psets, qtos: qtos
       }
+      unless Array(rec[:layers]).empty?
+        el[:layers] = rec[:layers].map do |l|
+          { name: l[:name], material: l[:material], thickness: l[:thickness],
+            category: WallTypes::FUNCTIONS[l[:function].to_s] }
+        end
+        el[:layer_set_name] = rec[:layer_set_name]
+      end
+      if rec[:mesh_parts]
+        el[:mesh_parts] = rec[:mesh_parts].map do |part|
+          { mesh: part[:mesh], color: part[:color] && part[:color].first(3).map { |c| c.to_f / 255.0 },
+            transparency: 1.0 - (part[:alpha] || 1.0).to_f }
+        end
+      end
       if %w[door window].include?(type.key)
         el[:overall_width] = Quantities.value(qty, 'Width')
         el[:overall_height] = Quantities.value(qty, 'Height')
@@ -118,6 +134,39 @@ module BIMSketch
 
     def sum(rows, key)
       rows.map { |r| r[key] }.compact.sum.round(3)
+    end
+
+    # Computo dei materiali dagli strati dei muri: superficie netta del muro
+    # (al netto delle aperture) per spessore di ogni strato, sommati per materiale.
+    def material_takeoff(records)
+      totals = Hash.new { |h, k| h[k] = { 'area' => 0.0, 'volume' => 0.0, 'elements' => 0 } }
+      records.each do |rec|
+        layers = Array(rec[:layers])
+        next if layers.empty?
+
+        area = Quantities.value(quantities(rec), 'NetSideArea')
+        next unless area
+
+        layers.each do |l|
+          t = totals[l[:material].to_s.empty? ? l[:name].to_s : l[:material].to_s]
+          t['area'] += area
+          t['volume'] += area * l[:thickness].to_f
+          t['elements'] += 1
+        end
+      end
+      totals.map do |material, t|
+        { 'material' => material, 'area' => t['area'].round(3), 'volume' => t['volume'].round(4),
+          'elements' => t['elements'] }
+      end.sort_by { |r| r['material'] }
+    end
+
+    def takeoff_csv(rows)
+      lines = [['Materiale', 'Superficie (m²)', 'Volume (m³)', 'Strati'].map { |c| csv_cell(c) }.join(';')]
+      rows.each do |r|
+        lines << [csv_cell(r['material']), Quantities.format_number(r['area'], 3),
+                  Quantities.format_number(r['volume'], 4), r['elements'].to_s].join(';')
+      end
+      "\uFEFF" + lines.join("\r\n") + "\r\n"
     end
 
     # CSV con separatore ';' e virgola decimale (compatibile con Excel in italiano).

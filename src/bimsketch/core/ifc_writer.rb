@@ -12,6 +12,10 @@ module BIMSketch
   #   guid:, ifc_class:, name:, description:, object_type:, predefined:, tag:,
   #   storey_id:, material:, color: [r,g,b] (0..1), transparency: (0..1),
   #   mesh: { points: [[x,y,z], ...], triangles: [[i,j,k], ...] }  (indici 0-based, m)
+  #   mesh_parts: [{ mesh:, color:, transparency: }]  (in alternativa a mesh: una
+  #               geometria per parte, ognuna con il suo colore, es. gli strati di un muro)
+  #   layers: [{ name:, material:, thickness: (m), category: }], layer_set_name:
+  #           (stratigrafia: IfcMaterialLayerSet al posto del materiale singolo)
   #   psets: [{ name:, props: [{ name:, type:, value: }] }]
   #   qtos:  [{ name:, quantities: [{ name:, kind:, value: }] }]
   #   overall_width:, overall_height:  (solo porte/finestre)
@@ -192,6 +196,8 @@ module BIMSketch
       contained = Hash.new { |h, k| h[k] = [] }
       spaces = Hash.new { |h, k| h[k] = [] }
       by_material = Hash.new { |h, k| h[k] = [] }
+      by_layer_set = Hash.new { |h, k| h[k] = [] }
+      layer_sets = {}
 
       @elements.each do |el|
         storey = storey_for(el)
@@ -202,7 +208,15 @@ module BIMSketch
           contained[storey[:id]] << id
         end
         mat = el[:material].to_s.strip
-        by_material[mat] << id unless mat.empty?
+        layers = Array(el[:layers]).select { |l| l[:thickness].to_f.positive? }
+        if layers.empty?
+          by_material[mat] << id unless mat.empty?
+        else
+          key = [el[:layer_set_name].to_s,
+                 layers.map { |l| [l[:name].to_s, l[:material].to_s, l[:thickness].to_f.round(6)] }]
+          layer_sets[key] ||= [el[:layer_set_name], layers]
+          by_layer_set[key] << id
+        end
         write_psets(el, id)
         write_qtos(el, id)
       end
@@ -216,9 +230,22 @@ module BIMSketch
             refs(ids))
       end
       by_material.each do |name, ids|
-        mat = add('IFCMATERIAL', str(name), UNSET, UNSET)
-        add('IFCRELASSOCIATESMATERIAL', guid, ref(@owner), UNSET, UNSET, refs(ids), ref(mat))
+        add('IFCRELASSOCIATESMATERIAL', guid, ref(@owner), UNSET, UNSET, refs(ids), ref(material(name)))
       end
+      by_layer_set.each do |key, ids|
+        name, layers = layer_sets[key]
+        items = layers.map do |l|
+          mat_name = l[:material].to_s.strip.empty? ? l[:name].to_s : l[:material].to_s
+          add('IFCMATERIALLAYER', ref(material(mat_name)), real(l[:thickness]), UNSET, str(l[:name]),
+              UNSET, str(l[:category]), UNSET)
+        end
+        set = add('IFCMATERIALLAYERSET', refs(items), str(name), UNSET)
+        add('IFCRELASSOCIATESMATERIAL', guid, ref(@owner), UNSET, UNSET, refs(ids), ref(set))
+      end
+    end
+
+    def material(name)
+      @materials[name] ||= add('IFCMATERIAL', str(name), UNSET, UNSET)
     end
 
     def write_element(el, storey)
@@ -245,19 +272,25 @@ module BIMSketch
     end
 
     def write_representation(el, elevation)
-      mesh = el[:mesh]
-      return nil unless mesh && mesh[:triangles] && !mesh[:triangles].empty?
+      parts = el[:mesh_parts] || [{ mesh: el[:mesh], color: el[:color], transparency: el[:transparency] }]
+      face_sets = parts.map do |part|
+        mesh = part[:mesh]
+        next nil unless mesh && mesh[:triangles] && !mesh[:triangles].empty?
 
-      coords = mesh[:points].map do |p|
-        list([real(p[0]), real(p[1]), real(p[2] - elevation)])
-      end
-      point_list = add('IFCCARTESIANPOINTLIST3D', list(coords))
-      tris = mesh[:triangles].map { |t| list(t.map { |i| (i + 1).to_s }) }
-      face_set = add('IFCTRIANGULATEDFACESET', ref(point_list), UNSET, UNSET, list(tris), UNSET)
-      style = surface_style(el[:color], el[:transparency])
-      add('IFCSTYLEDITEM', ref(face_set), refs([style]), UNSET) if style
+        coords = mesh[:points].map do |p|
+          list([real(p[0]), real(p[1]), real(p[2] - elevation)])
+        end
+        point_list = add('IFCCARTESIANPOINTLIST3D', list(coords))
+        tris = mesh[:triangles].map { |t| list(t.map { |i| (i + 1).to_s }) }
+        face_set = add('IFCTRIANGULATEDFACESET', ref(point_list), UNSET, UNSET, list(tris), UNSET)
+        style = surface_style(part[:color], part[:transparency])
+        add('IFCSTYLEDITEM', ref(face_set), refs([style]), UNSET) if style
+        face_set
+      end.compact
+      return nil if face_sets.empty?
+
       shape = add('IFCSHAPEREPRESENTATION', ref(@body_context), str('Body'), str('Tessellation'),
-                  refs([face_set]))
+                  refs(face_sets))
       add('IFCPRODUCTDEFINITIONSHAPE', UNSET, UNSET, refs([shape]))
     end
 

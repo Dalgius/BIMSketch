@@ -35,7 +35,8 @@ module BIMSketch
     # ('center', 'left', 'right' rispetto alla direzione di disegno).
     # ext: prolungamenti [start_lo, start_hi, end_lo, end_hi] delle due facce
     # (vedi WallJoint), per i giunti a quartabuono con i muri adiacenti.
-    def wall(model, p1, p2, thickness, height, align = 'center', ext: [0, 0, 0, 0])
+    # auto_height: l'altezza segue quella del livello (vedi Levels.update).
+    def wall(model, p1, p2, thickness, height, align = 'center', ext: [0, 0, 0, 0], auto_height: true)
       frame = wall_frame(p1, p2, thickness, align)
       return nil unless frame
 
@@ -45,13 +46,18 @@ module BIMSketch
         Geometry.build_wall(ents, length, thickness, height, ext, [])
       end
       finish(model, group, 'wall', { 'wall_align' => align })
-      store_wall_geom(group, length, thickness, height, align, ext)
+      store_wall_geom(group, length, thickness, height, align, ext, auto_height)
       group
     end
 
-    def store_wall_geom(wall, length, thickness, height, align, ext)
+    # auto nil = mantiene l'impostazione già salvata nel muro.
+    def store_wall_geom(wall, length, thickness, height, align, ext, auto = nil)
+      if auto.nil?
+        old = wall_geom(wall)
+        auto = old ? old[:auto] : true
+      end
       geom = { 'length' => length.to_f, 'thickness' => thickness.to_f, 'height' => height.to_f,
-               'align' => align, 'ext' => WallJoint.normalize_ext(ext) }
+               'align' => align, 'ext' => WallJoint.normalize_ext(ext), 'auto_height' => auto ? true : false }
       wall.set_attribute(BimData::DICT, 'wall_geom', JSON.generate(geom))
       wall.set_attribute(BimData::DICT, 'wall_align', align)
     end
@@ -64,11 +70,12 @@ module BIMSketch
       if raw
         g = JSON.parse(raw)
         return { length: g['length'].to_f, thickness: g['thickness'].to_f, height: g['height'].to_f,
-                 align: g['align'] || 'center', ext: WallJoint.normalize_ext(g['ext']) }
+                 align: g['align'] || 'center', ext: WallJoint.normalize_ext(g['ext']),
+                 auto: g.key?('auto_height') ? g['auto_height'] == true : true }
       end
       bb = wall.definition.bounds
       { length: (bb.max.x - bb.min.x).to_f, thickness: (bb.max.y - bb.min.y).to_f,
-        height: (bb.max.z - bb.min.z).to_f, align: 'center', ext: [0.0, 0.0, 0.0, 0.0] }
+        height: (bb.max.z - bb.min.z).to_f, align: 'center', ext: [0.0, 0.0, 0.0, 0.0], auto: true }
     rescue JSON::ParserError
       nil
     end
@@ -93,9 +100,13 @@ module BIMSketch
     # Ricostruisce un muro esistente con nuovi prolungamenti (coordinate mondo),
     # mantenendo gruppo, GlobalId, proprietà e aperture. Rifiuta i muri
     # modificati a mano o le cui aperture uscirebbero dal tratto centrale.
-    def reshape_wall(model, wall, ext)
+    # height (mondo) e auto permettono anche di cambiare l'altezza del muro.
+    def reshape_wall(model, wall, ext, height: nil, auto: nil)
       pr = wall_params(model, wall)
       return false unless pr && wall_intact?(wall)
+
+      height = (height || pr[:height]).to_f
+      return false if height < 0.1.m
 
       frame = wall_frame(pr[:p1], pr[:p2], pr[:thickness], pr[:align])
       return false unless frame
@@ -105,15 +116,18 @@ module BIMSketch
       tr, length = frame
       ext = WallJoint.normalize_ext(ext)
       lo_x, hi_x = WallJoint.core_range(length, ext)
-      return false unless openings.all? { |a, b, _c, _d| a >= lo_x + OPENING_GAP && b <= hi_x - OPENING_GAP }
+      fits = openings.all? do |a, b, _c, d|
+        a >= lo_x + OPENING_GAP && b <= hi_x - OPENING_GAP && d <= height - OPENING_GAP
+      end
+      return false unless fits
 
       tr = model.edit_transform.inverse * tr if model.active_path
       wall.make_unique if wall.respond_to?(:make_unique)
       ents = wall.definition.entities
       ents.clear!
-      Geometry.build_wall(ents, length, pr[:thickness], pr[:height], ext, openings)
+      Geometry.build_wall(ents, length, pr[:thickness], height, ext, openings)
       wall.transformation = tr
-      store_wall_geom(wall, length, pr[:thickness], pr[:height], pr[:align], ext)
+      store_wall_geom(wall, length, pr[:thickness], height, pr[:align], ext, auto)
       wall.set_attribute(BimData::DICT, 'openings', JSON.generate(openings)) unless openings.empty?
       true
     end
@@ -146,7 +160,7 @@ module BIMSketch
     # portato sull'asse di quel muro e l'angolo viene raccordato a quartabuono
     # (anche il muro esistente viene adattato). Restituisce
     # { wall:, end_point:, joined_end: }.
-    def wall_connected(model, p1, p2, thickness, height, align = 'center')
+    def wall_connected(model, p1, p2, thickness, height, align = 'center', auto_height: true)
       tol = snap_tolerance(thickness)
       start_hit = wall_end_near(model, p1, tol)
       p1 = start_hit[:point] if start_hit
@@ -191,7 +205,7 @@ module BIMSketch
         end
         ext[2], ext[3] = joint[0] if joint && reshape_wall(model, end_hit[:wall], new_ext)
       end
-      group = wall(model, p1, p2, thickness, height, align, ext: ext)
+      group = wall(model, p1, p2, thickness, height, align, ext: ext, auto_height: auto_height)
       group && { wall: group, end_point: p2, joined_end: !end_hit.nil? }
     end
 
@@ -202,13 +216,13 @@ module BIMSketch
     # Sequenza di muri tra i punti indicati (stessa quota), con i giunti
     # d'angolo calcolati da WallJoint. Se closed, l'ultimo punto si ricollega
     # al primo. Restituisce i gruppi creati.
-    def wall_chain(model, points, thickness, height, align = 'center', closed: false)
+    def wall_chain(model, points, thickness, height, align = 'center', closed: false, auto_height: true)
       lo, hi = WallJoint.band(align, thickness.to_f)
       exts = WallJoint.chain(points.map { |p| [p.x.to_f, p.y.to_f] }, lo, hi, closed: closed)
       ends = points.each_cons(2).to_a
       ends << [points.last, points.first] if closed && points.size > 2
       ends.each_with_index.map do |(p1, p2), i|
-        wall(model, p1, p2, thickness, height, align, ext: exts[i])
+        wall(model, p1, p2, thickness, height, align, ext: exts[i], auto_height: auto_height)
       end
     end
 
@@ -236,13 +250,15 @@ module BIMSketch
     end
 
     # Pilastro rettangolare centrato in center (base alla quota di center).
-    def column(model, center, width, depth, height, rotation = 0.0)
+    def column(model, center, width, depth, height, rotation = 0.0, auto_height: true)
       xaxis = Geom::Vector3d.new(Math.cos(rotation), Math.sin(rotation), 0)
       tr0 = Geometry.frame_transform(center, xaxis)
       origin = Geom::Point3d.new(-width / 2.0, -depth / 2.0, 0).transform(tr0)
       tr = Geometry.frame_transform(origin, xaxis)
       group = Geometry.create_group(model, tr) { |ents| Geometry.box(ents, width, depth, height) }
       finish(model, group, 'column')
+      group.set_attribute(BimData::DICT, 'auto_height', auto_height ? true : false)
+      group
     end
 
     # Trave da p1 a p2 con estradosso (faccia superiore) alla quota top_z.
@@ -256,7 +272,65 @@ module BIMSketch
       origin = a.offset(Z_AXIS * xaxis, -width / 2.0)
       tr = Geometry.frame_transform(origin, xaxis)
       group = Geometry.create_group(model, tr) { |ents| Geometry.box(ents, dir.length, width, height) }
-      finish(model, group, 'beam')
+      finish(model, group, 'beam', { 'auto_top' => true })
+    end
+
+    # Altezza di muri e pilastri parametrici: { height: (mondo), auto: } o nil.
+    def element_height(model, entity)
+      return nil unless BimData.element?(entity) && entity.get_attribute(BimData::DICT, 'parametric') == true
+
+      case BimData.type_key(entity)
+      when 'wall'
+        g = wall_geom(entity)
+        g && { height: g[:height] * Geometry.scales(entity.transformation)[2], auto: g[:auto] }
+      when 'column'
+        bb = entity.definition.bounds
+        auto = entity.get_attribute(BimData::DICT, 'auto_height')
+        { height: (bb.max.z - bb.min.z) * Geometry.scales(entity.transformation)[2], auto: auto != false }
+      end
+    end
+
+    # Imposta l'altezza di un muro o pilastro parametrico. Con auto: true
+    # l'altezza diventa (e resta) quella del livello dell'elemento.
+    # Restituisce false se l'elemento non può essere ricostruito.
+    def set_height(model, entity, height: nil, auto: false)
+      info = element_height(model, entity)
+      return false unless info
+
+      if auto
+        lvl = Levels.find(model, BimData.level_id(entity)) || Levels.for_entity(model, entity)
+        height = lvl['height'].m
+      end
+      return false unless height && height.to_f >= 0.1.m
+
+      case BimData.type_key(entity)
+      when 'wall'
+        pr = wall_params(model, entity)
+        pr ? reshape_wall(model, entity, pr[:ext], height: height, auto: auto) : false
+      when 'column'
+        resize_column(entity, height, auto)
+      else
+        false
+      end
+    end
+
+    def resize_column(column, height, auto)
+      bb = column.definition.bounds
+      sx, sy, sz = Geometry.scales(column.transformation)
+      w = (bb.max.x - bb.min.x) * sx
+      d = (bb.max.y - bb.min.y) * sy
+      expected = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z) * sx * sy * sz
+      return false unless column.volume > 0 && (column.volume - expected).abs <= [expected * 0.001, 1.0].max
+
+      tr = column.transformation
+      origin = Geom::Point3d.new(bb.min.x, bb.min.y, bb.min.z).transform(tr)
+      xaxis = X_AXIS.transform(tr)
+      column.make_unique if column.respond_to?(:make_unique)
+      column.definition.entities.clear!
+      Geometry.box(column.definition.entities, w, d, height)
+      column.transformation = Geometry.frame_transform(origin, xaxis)
+      column.set_attribute(BimData::DICT, 'auto_height', auto ? true : false)
+      true
     end
 
     # Verifica se l'entità è un muro parametrico utilizzabile per le aperture.

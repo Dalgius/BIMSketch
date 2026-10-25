@@ -143,6 +143,7 @@ module BIMSketch
           data['mode'] = 'multi'
           keys = elements.map { |e| BimData.type_key(e) }.uniq
           data['common_type'] = keys.size == 1 ? keys.first : nil
+          data['dims'] = elements.any? { |e| Builder.element_height(model, e) }
           data['summary'] = elements.group_by { |e| BimData.type(e) }.map do |t, es|
             { 'label' => t ? t.plural : '?', 'count' => es.size }
           end
@@ -191,17 +192,49 @@ module BIMSketch
             'unit' => Quantities::UNITS[q[:kind]] }
         end
         data['solid'] = rec[:solid]
+        info = Builder.element_height(model, entity)
+        data['dims'] = { 'height' => info[:height].to_m.round(4), 'auto' => info[:auto] } if info
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
+      end
+
+      # Applica altezza numerica o automatica (campi 'height' in m e
+      # 'auto_height'). Restituisce false se l'elemento non è stato adattato.
+      def apply_height(entity, el)
+        info = Builder.element_height(model, entity)
+        return true unless info && el.key?('auto_height')
+
+        auto = case el['auto_height']
+               when true, 'true' then true
+               when false, 'false' then false
+               end
+        height = begin
+          Float(el['height'].to_s.strip.tr(',', '.')).m
+        rescue ArgumentError, TypeError
+          nil
+        end
+        if auto
+          lvl = Levels.find(model, BimData.level_id(entity)) || Levels.for_entity(model, entity)
+          return true if info[:auto] && (info[:height] - lvl['height'].m).abs < 0.5.mm
+
+          return Builder.set_height(model, entity, auto: true)
+        end
+        target = height || (auto == false ? info[:height] : nil)
+        return true unless target
+        return true if (target - info[:height]).abs < 0.5.mm && !(auto == false && info[:auto])
+
+        Builder.set_height(model, entity, height: target, auto: false)
       end
 
       def save(data)
         elements = model.selection.select { |e| BimData.element?(e) }
         return if elements.empty?
 
+        failed = 0
         model.start_operation('BIMSketch: Proprietà', true)
         if data['mode'] == 'single'
           BimData.write(elements.first, data['element'] || {})
+          failed += 1 unless apply_height(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
@@ -212,11 +245,16 @@ module BIMSketch
             props = (changes['props'] || {}).reject { |_, v| v.to_s.empty? }
             patch['props'] = BimData.json_attr(e, 'props').merge(props) unless props.empty?
             BimData.write(e, patch)
+            failed += 1 unless apply_height(e, changes)
           end
         end
         model.commit_operation
         refresh
         push('saved', true)
+        if failed.positive?
+          ::UI.messagebox("Altezza non modificata per #{failed} elementi: sono stati modificati a mano " \
+                          "oppure le loro aperture non entrerebbero nella nuova altezza.")
+        end
       rescue StandardError
         model.abort_operation
         raise
@@ -244,6 +282,11 @@ module BIMSketch
           'save' => lambda { |d|
             Levels.update(model, d['levels'], move_elements: d['move'] != false)
             refresh
+            n = Levels.skipped_last_update
+            if n.positive?
+              ::UI.messagebox("#{n} muri/pilastri non hanno preso la nuova altezza del livello: sono stati " \
+                              'modificati a mano oppure le loro aperture non entrerebbero.')
+            end
           },
           'add' => lambda { |d|
             levels = Levels.all(model)

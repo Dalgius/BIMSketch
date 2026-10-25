@@ -88,6 +88,22 @@
       '<button class="primary" id="classify">Classifica</button></div></div>';
   }
 
+  // Altezza di muri e pilastri: valore numerico o automatica (segue il livello).
+  function renderDims(dims, multi) {
+    if (!dims) return '';
+    var html = '<h2>Dimensioni</h2><div class="panel">';
+    if (multi) {
+      html += row('Altezza segue il livello', '<select id="f_auto_height">' +
+        options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No (valore fisso)' }], '', '(invariato)') + '</select>') +
+        row('Altezza (m)', '<input id="f_height" class="num" placeholder="(invariato)">');
+    } else {
+      html += row('Altezza segue il livello', '<input type="checkbox" id="f_auto_height"' + (dims.auto ? ' checked' : '') + '>') +
+        row('Altezza (m)', '<input id="f_height" class="num" value="' + BIM.num(dims.height, 3) + '"' + (dims.auto ? ' disabled' : '') + '>');
+    }
+    html += '<div class="muted">Con l\'altezza automatica l\'elemento si adegua quando cambi l\'altezza del livello.</div>';
+    return html + '</div>';
+  }
+
   function renderSingle() {
     var e = state.element;
     var html = '<h1>' + BIM.esc(e.name || (typeByKey(e.type) || {}).label || 'Elemento') + '</h1>';
@@ -100,6 +116,7 @@
       row('Materiale BIM', '<input id="f_material" placeholder="' + BIM.esc(e.sketchup_material) + '" value="' + BIM.esc(e.material) + '">') +
       row('IFC GlobalId', '<input readonly value="' + BIM.esc(e.guid) + '">') +
       '</div>';
+    html += renderDims(e.dims, false);
     html += '<div id="propsBox">' + renderProps(e.type, e.props, false) + '</div>';
     html += renderCustom(e.custom);
     html += '<h2>Quantità</h2><div class="panel">';
@@ -123,6 +140,7 @@
       row('Livello', '<select id="f_level">' + options(levelOptions(), '', '(invariato)') + '</select>') +
       row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="(invariato)">') +
       row('Materiale BIM', '<input id="f_material" placeholder="(invariato)">') + '</div>';
+    html += renderDims(state.dims ? {} : null, true);
     html += '<div id="propsBox">' + (state.common_type ? renderProps(state.common_type, {}, true) : '') + '</div>';
     html += '<div class="toolbar"><button class="primary" id="save">Applica a tutti</button>' +
       '<button id="refresh">Aggiorna</button></div>';
@@ -157,6 +175,11 @@
       if (!(multi && v === '')) props[n.getAttribute('data-prop')] = v;
     }
     el.props = props;
+    var auto = BIM.$('f_auto_height');
+    if (auto) {
+      el.auto_height = auto.type === 'checkbox' ? auto.checked : auto.value;
+      el.height = BIM.$('f_height').value;
+    }
     if (!multi) {
       var custom = {};
       var rows = document.querySelectorAll('#custom tr');
@@ -178,6 +201,10 @@
     });
     on('classify', 'click', function () { BIM.call('classify', { type: BIM.$('classType').value }); });
     on('levelsBtn', 'click', function () { BIM.call('levels'); });
+    on('f_auto_height', 'change', function () {
+      var a = BIM.$('f_auto_height');
+      if (a.type === 'checkbox') BIM.$('f_height').disabled = a.checked;
+    });
     on('f_type', 'change', function () {
       var key = BIM.$('f_type').value;
       var box = BIM.$('propsBox');

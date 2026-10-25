@@ -89,7 +89,8 @@ module BIMSketch
 
         align = Settings.get('wall_align')
         result = run_operation('BIMSketch: Muro') do
-          Builder.wall_connected(model, start, pt, thickness, height, align)
+          Builder.wall_connected(model, start, pt, thickness, height, align,
+                                 auto_height: Settings.get('wall_height').to_f <= 0)
         end
         return unless result
 

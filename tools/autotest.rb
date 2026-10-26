@@ -757,7 +757,10 @@ module BIMSketchAutotest
         records = BIMSketch::Collector.collect(model, mesh: true)
         rec = records.find { |r| r[:entity] == @e[:layered] }
         assert(rec[:layers] && rec[:layers].size == 4, 'strati non raccolti')
-        assert(rec[:mesh_parts] && rec[:mesh_parts].size == 4, 'geometria per strato mancante')
+        # 4 strati + 2 risvolti attorno alla porta.
+        parts = layers_of(@e[:layered]).size + reveals_of(@e[:layered]).size
+        assert(parts == 6 && rec[:mesh_parts] && rec[:mesh_parts].size == parts,
+               "geometrie per parte: #{rec[:mesh_parts] && rec[:mesh_parts].size} invece di #{parts}")
         levels = BIMSketch::Levels.all(model)
         w = BIMSketch::IfcWriter.new(project_name: 'Autotest')
         levels.each { |l| w.add_storey(id: l['id'], name: l['name'], elevation: l['elevation']) }

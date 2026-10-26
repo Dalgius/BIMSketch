@@ -16,7 +16,7 @@
 require 'tmpdir'
 
 module BIMSketchAutotest
-  IN3_TO_M3 = 0.0254**3
+  IN3_TO_M3 = 0.0254**3 unless const_defined?(:IN3_TO_M3)
 
   @results = []
 
@@ -466,13 +466,15 @@ module BIMSketchAutotest
       check('Muro che termina sul corpo di un altro (T perpendicolare)') do
         model.start_operation('Autotest T', true)
         host = b.wall(model, pt(0, 100, 0), pt(6, 100, 0), 0.3.m, 3.m, 'center')
-        res = b.wall_connected(model, pt(3, 103, 0), pt(3.05, 100.1, 0), 0.3.m, 3.m, 'center')
+        # Clic finale 10 cm dentro il muro principale: il punto va proiettato sul suo asse.
+        res = b.wall_connected(model, pt(3, 103, 0), pt(3, 100.1, 0), 0.3.m, 3.m, 'center')
         model.commit_operation
         @e[:tee_host] = host
         @e[:tee_a] = res[:wall]
         assert(res[:joined_end], 'il muro non si è agganciato al muro principale')
         p2 = b.wall_params(model, res[:wall])[:p2]
-        [approx(p2.x.to_m, 3.0, 0.001, 'aggancio x'),
+        [approx(p2.y.to_m, 100.0, 0.001, 'aggancio sull\'asse'),
+         approx(p2.x.to_m, 3.0, 0.001, 'aggancio x'),
          approx(volume_m3(res[:wall]), 2.85 * 0.3 * 3, 0.002, 'volume muro a T'),
          approx(volume_m3(host), 6 * 0.3 * 3, 0.002, 'muro principale invariato')].join(', ')
       end

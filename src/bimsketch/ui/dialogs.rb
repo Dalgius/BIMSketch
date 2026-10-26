@@ -297,6 +297,16 @@ module BIMSketch
         ok
       end
 
+      # Livello scelto nel pannello: gli elementi che cambiano livello si
+      # spostano alla quota del nuovo livello (vedi Levels.relocate).
+      # Restituisce il numero di elementi la cui altezza non è stata adattata.
+      def change_level(elements, id)
+        return 0 if id.to_s.empty?
+
+        moving = elements.reject { |e| BimData.level_id(e) == id }
+        moving.empty? ? 0 : Levels.relocate(model, moving, id)
+      end
+
       def save(data)
         elements = model.selection.select { |e| BimData.element?(e) }
         return if elements.empty?
@@ -304,7 +314,11 @@ module BIMSketch
         failed = 0
         model.start_operation('BIMSketch: Proprietà', true)
         if data['mode'] == 'single'
-          BimData.write(elements.first, data['element'] || {})
+          el = data['element'] || {}
+          BimData.write(elements.first, el.reject { |k, _| k == 'level' })
+          # "(automatico)": il livello verrà dedotto dalla quota.
+          elements.first.set_attribute(BimData::DICT, 'level', '') if el.key?('level') && el['level'].to_s.empty?
+          failed += change_level(elements, el['level'])
           failed += 1 unless apply_height(elements.first, data['element'] || {})
           failed += 1 unless apply_wall_type(elements.first, data['element'] || {})
           failed += 1 unless apply_slab_type(elements.first, data['element'] || {})
@@ -312,7 +326,7 @@ module BIMSketch
           changes = data['element'] || {}
           elements.each do |e|
             patch = {}
-            %w[type level material object_type predefined].each do |k|
+            %w[type material object_type predefined].each do |k|
               patch[k] = changes[k] unless changes[k].to_s.empty?
             end
             props = (changes['props'] || {}).reject { |_, v| v.to_s.empty? }
@@ -322,6 +336,7 @@ module BIMSketch
             failed += 1 unless apply_wall_type(e, changes)
             failed += 1 unless apply_slab_type(e, changes)
           end
+          failed += change_level(elements, changes['level'])
         end
         model.commit_operation
         refresh

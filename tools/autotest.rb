@@ -98,6 +98,7 @@ module BIMSketchAutotest
       run_separate_walls
       run_openings
       run_other_elements
+      run_level_change
       run_classification
       run_wall_types
       run_slab_types
@@ -352,6 +353,28 @@ module BIMSketchAutotest
         model.commit_operation
         assert(!ok, 'il muro è stato abbassato sotto la porta')
         approx(height_m(@e[:wall]), 3.0, 0.001, 'altezza invariata')
+      end
+    end
+
+    def run_level_change
+      check('Cambio livello sposta solaio, muro e finestra') do
+        b = BIMSketch::Builder
+        BIMSketch::Levels.set_current(model, 'L0')
+        model.start_operation('Autotest cambio livello', true)
+        s = b.slab(model, [pt(40, 0, 0), pt(44, 0, 0), pt(44, 3, 0), pt(40, 3, 0)], 0.25.m, 0)
+        w = b.wall(model, pt(40, 10, 0), pt(44, 10, 0), 0.3.m, 3.m, 'center')
+        win = b.opening(model, w, 'window', 2.m, 1.2.m, 1.4.m, 0.9.m)
+        model.commit_operation
+        l1 = BIMSketch::Levels.find(model, 'L1')
+        model.start_operation('Autotest relocate', true)
+        skipped = BIMSketch::Levels.relocate(model, [s, w], 'L1')
+        model.commit_operation
+        assert(skipped.zero?, "#{skipped} altezze non adattate")
+        assert([s, w, win].all? { |e| BIMSketch::BimData.level_id(e) == 'L1' }, 'livello non assegnato')
+        [approx(s.bounds.max.z.to_m, l1['elevation'], 0.001, 'estradosso solaio'),
+         approx(w.bounds.min.z.to_m, l1['elevation'], 0.001, 'base muro'),
+         approx(height_m(w), l1['height'], 0.001, 'altezza muro'),
+         approx(win.bounds.min.z.to_m, l1['elevation'] + 0.9, 0.001, 'davanzale finestra')].join(', ')
       end
     end
 

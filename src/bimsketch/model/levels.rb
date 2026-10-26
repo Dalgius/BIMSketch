@@ -104,6 +104,37 @@ module BIMSketch
       @skipped.to_i
     end
 
+    # Porta gli elementi sul livello indicato: ognuno si sposta in verticale
+    # della differenza di quota tra il suo livello e quello nuovo (le travi
+    # anche della differenza di altezza), insieme alle porte e finestre che
+    # ospita; muri e pilastri con altezza automatica prendono l'altezza del
+    # nuovo livello. Un elemento senza livello valido viene solo assegnato.
+    # Va chiamato dentro un'operazione; restituisce il numero di elementi
+    # la cui altezza non è stata adattata.
+    def relocate(model, entities, to_id)
+      to = find(model, to_id)
+      return 0 unless to
+
+      items = entities.select { |e| BimData.element?(e) }
+      guids = items.map { |e| BimData.guid(e) }.compact
+      hosted = model.active_entities.select do |e|
+        BimData.element?(e) && guids.include?(e.get_attribute(BimData::DICT, 'host'))
+      end
+      @skipped = 0
+      (items + hosted).uniq.each do |e|
+        from = find(model, BimData.level_id(e))
+        e.set_attribute(BimData::DICT, 'level', to['id'])
+        next unless from && from['id'] != to['id']
+
+        dz = to['elevation'] - from['elevation']
+        dz += to['height'] - from['height'] if BimData.type_key(e) == 'beam' &&
+                                               e.get_attribute(BimData::DICT, 'auto_top') != false
+        e.transform!(Geom::Transformation.translation([0, 0, dz.m])) unless dz.abs < 1e-6
+        sync_heights(model, [e], to)
+      end
+      @skipped
+    end
+
     # Porta all'altezza del livello i muri e i pilastri con altezza automatica.
     def sync_heights(model, elements, lvl)
       target = lvl['height'].m

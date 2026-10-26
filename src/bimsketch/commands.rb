@@ -192,7 +192,7 @@ module BIMSketch
       return 0 if items.empty?
 
       operation('BIMSketch: Assegna livello') do
-        items.each { |e| e.set_attribute(BimData::DICT, 'level', level_id) }
+        Levels.relocate(model, items, level_id)
         items.size
       end
     end

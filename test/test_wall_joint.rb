@@ -97,3 +97,50 @@ class WallJointTest < Minitest::Test
     assert_equal [1, 2, 3, 4], J.flip_ext([4, 3, 2, 1])
   end
 end
+
+class WallTeeTest < Minitest::Test
+  J = BIMSketch::WallJoint
+
+  # Host wall along x (axis y = 0), 30 cm centred; branch ending on its axis.
+  HOST = [[0.0, 0.0], [1.0, 0.0]].freeze
+
+  def branch_end(n_start, point, band_n = [-0.15, 0.15], band_h = [-0.15, 0.15])
+    d_n = J.direction(n_start, point)
+    face = J.facing_offset(HOST[0], [1.0, 0.0], band_h, n_start)
+    J.tee(point, d_n, band_n, HOST[0], [1.0, 0.0], face)
+  end
+
+  def test_perpendicular_branch_stops_at_near_face
+    from_above = branch_end([2, 3], [2, 0])
+    assert_in_delta(-0.15, from_above[0], 1e-9)
+    assert_in_delta(-0.15, from_above[1], 1e-9)
+    from_below = branch_end([2, -3], [2, 0])
+    assert_equal [-0.15, -0.15], from_below.map { |v| v.round(9) }
+  end
+
+  def test_thicker_host_and_left_aligned_branch
+    s = branch_end([2, 3], [2, 0], [0.0, 0.3], [-0.2125, 0.2125])
+    assert_equal [-0.2125, -0.2125], s.map { |v| v.round(9) }
+  end
+
+  # 45 degrees: the two faces of the branch hit the host face at different points.
+  def test_oblique_branch_is_cut_along_the_host_face
+    s = branch_end([-1, 3], [2, 0])
+    r = Math.sqrt(2)
+    # Each branch face line meets y = 0.15; the cut follows the host face.
+    assert_in_delta(-0.15 * r - 0.15, s[0], 1e-9)
+    assert_in_delta(-0.15 * r + 0.15, s[1], 1e-9)
+  end
+
+  def test_parallel_has_no_tee
+    assert_nil J.tee([2, 0], [1, 0], [-0.15, 0.15], [0, 0], [1, 0], 0.15)
+  end
+
+  def test_project
+    dist, t, q, len = J.project([2, 0.1], [0, 0], [6, 0])
+    assert_in_delta 0.1, dist
+    assert_in_delta 2.0, t
+    assert_equal [2.0, 0.0], q
+    assert_in_delta 6.0, len
+  end
+end

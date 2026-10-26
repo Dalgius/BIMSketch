@@ -515,13 +515,23 @@ module BIMSketchAutotest
     # automatica che BIMSketch fa al termine dell'operazione.
     def sketchup_move(entity, vector, copy: false)
       model.start_operation('Autotest Sposta di SketchUp', true)
-      target = copy ? entity.copy : entity
+      target = copy ? duplicate(entity) : entity
       target.transform!(Geom::Transformation.translation(vector))
       model.commit_operation
       model.start_operation('Autotest correzione aperture', true)
       messages = BIMSketch::OpeningSync.process(model)
       model.commit_operation
       [target, messages]
+    end
+
+    # Copia come quella fatta con Ctrl nell'interfaccia, che mantiene i dati
+    # BIM (Group#copy di Ruby non copia gli attributi del gruppo).
+    def duplicate(entity)
+      c = entity.copy
+      (entity.attribute_dictionaries || []).each do |d|
+        d.each_pair { |k, v| c.set_attribute(d.name, k, v) }
+      end
+      c
     end
 
     def run_sketchup_move

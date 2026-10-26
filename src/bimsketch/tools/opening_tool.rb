@@ -47,7 +47,7 @@ module BIMSketch
         local_x = @local_x
         label = door? ? 'Porta' : 'Finestra'
         run_operation("BIMSketch: #{label}") do
-          Builder.opening(model, wall, @kind, local_x, width, height, sill)
+          Builder.opening(model, wall, @kind, local_x, width, height, sill, type_id: type['id'])
         end
         @wall = nil
         @preview = []
@@ -58,10 +58,29 @@ module BIMSketch
         draw_preview(view)
       end
 
+      # Tasto destro: scelta della tipologia (con le sue dimensioni predefinite).
+      def getMenu(menu, *args)
+        sub = menu.add_submenu(door? ? 'Tipologia porta' : 'Tipologia finestra')
+        OpeningTypes.all(@kind).each do |t|
+          dims = format('%d x %d cm', (t['width'] * 100).round, (t['height'] * 100).round)
+          item = sub.add_item("#{t['name']} (#{dims})") do
+            Settings.apply_opening_type(@kind, t['id'])
+            update_ui
+            Sketchup.active_model.active_view.invalidate
+          end
+          sub.set_validation_proc(item) { t['id'] == type['id'] ? MF_CHECKED : MF_UNCHECKED }
+        end
+        super
+      end
+
       protected
 
       def door?
         @kind == 'door'
+      end
+
+      def type
+        Settings.opening_type(@kind)
       end
 
       def width
@@ -77,13 +96,13 @@ module BIMSketch
       end
 
       def update_ui
-        what = door? ? 'Porta' : 'Finestra'
+        what = type['name']
         dims = "#{width.to_s} x #{height.to_s}"
         Sketchup.status_text = if @wall
                                  "#{what} #{dims}: clic per inserire nel muro."
                                else
                                  "#{what} #{dims}: passa sopra un muro BIMSketch. " \
-                                   'Tasto destro: impostazioni.'
+                                   'Tasto destro: tipologia e impostazioni.'
                                end
       end
 

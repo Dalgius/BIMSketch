@@ -112,6 +112,7 @@ module BIMSketch
         props: data['props'] || {},
         custom: data['custom'] || {},
         host: data['host'],
+        operation: entity.get_attribute(BimData::DICT, 'operation'),
         tag: entity.respond_to?(:persistent_id) ? entity.persistent_id.to_s : nil,
         color: color,
         alpha: alpha,
@@ -122,7 +123,7 @@ module BIMSketch
       add_layers(model, entity, rec) unless proxy
       if with_mesh
         rec[:mesh] = mesh(defn, world)
-        parts = layer_children(defn)
+        parts = part_children(defn)
         unless parts.empty?
           rec[:mesh_parts] = parts.map do |child|
             m = child.material
@@ -146,6 +147,15 @@ module BIMSketch
       rec[:layer_set_name] = type['name']
       rec[:layers] = type['layers'].map do |l|
         { name: l['name'], material: l['material'], thickness: l['thickness'].to_f, function: l['function'] }
+      end
+    end
+
+    # Sotto-gruppi con geometria e colore propri: strati di muri e solai,
+    # parti (telaio, anta, vetro) di porte e finestre.
+    def part_children(defn)
+      defn.entities.select do |e|
+        BimData.instance?(e) && (!e.get_attribute(BimData::DICT, 'layer').nil? ||
+                                 !e.get_attribute(BimData::DICT, 'part').nil?)
       end
     end
 

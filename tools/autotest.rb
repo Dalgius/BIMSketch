@@ -97,6 +97,7 @@ module BIMSketchAutotest
       run_walls
       run_separate_walls
       run_openings
+      run_opening_types
       run_other_elements
       run_level_change
       run_classification
@@ -381,6 +382,50 @@ module BIMSketchAutotest
          approx(c.bounds.min.z.to_m, l1['elevation'], 0.001, 'base pilastro'),
          approx(height_m(c), l1['height'], 0.001, 'altezza pilastro'),
          approx(bm.bounds.max.z.to_m, l1['elevation'] + l1['height'], 0.001, 'estradosso trave')].join(', ')
+      end
+    end
+
+    def parts_of(entity)
+      entity.definition.entities.select { |e| e.is_a?(Sketchup::Group) && e.get_attribute('BIMSketch', 'part') }
+    end
+
+    def run_opening_types
+      puts "\n[Tipologie porte e finestre]"
+      b = BIMSketch::Builder
+      { 'door' => 140, 'window' => 150 }.each do |kind, y|
+        BIMSketch::OpeningTypes.all(kind).each_with_index do |t, i|
+          check("#{t['name']} (#{t['id']})") do
+            model.start_operation('Autotest tipologia apertura', true)
+            @e[:"host_#{kind}"] ||= b.wall(model, pt(0, y, 0), pt(8, y, 0), 0.3.m, 3.m, 'center')
+            o = b.opening(model, @e[:"host_#{kind}"], kind, [1.0, 2.6, 4.2, 6.0][i].m, t['width'].m,
+                          t['height'].m, t['sill'].m, type_id: t['id'])
+            model.commit_operation
+            assert(o, 'apertura non creata')
+            parts = parts_of(o)
+            assert(parts.all? { |p| p.volume > 0 }, 'una parte non è un solido')
+            frame = parts.find { |p| p.name == 'Telaio' }
+            assert(frame && frame.material && frame.material.alpha > 0.99, 'telaio mancante o trasparente')
+            glass = parts.count { |p| p.name == 'Vetro' }
+            glazed = kind == 'window' || t['style'] == 'glazed'
+            assert(glazed ? glass >= 1 : glass.zero?, "vetri: #{glass}")
+            assert(BIMSketch::BimData.read(o)['object_type'] == t['name'], 'tipologia non scritta')
+            [approx((o.bounds.max.x - o.bounds.min.x).to_m, t['width'], 0.002, 'larghezza'),
+             approx(o.bounds.min.z.to_m, t['sill'], 0.002, 'quota'),
+             "#{parts.size} parti, #{glass} vetri"].join(', ')
+          end
+        end
+      end
+      check('Tipo di apertura nell\'IFC') do
+        records = BIMSketch::Collector.collect(model, mesh: true)
+        levels = BIMSketch::Levels.all(model)
+        w = BIMSketch::IfcWriter.new(project_name: 'Autotest')
+        levels.each { |l| w.add_storey(id: l['id'], name: l['name'], elevation: l['elevation']) }
+        records.each { |r| w.add_element(BIMSketch::Records.to_ifc_element(r, levels)) }
+        text = w.to_s
+        %w[.DOUBLE_DOOR_SINGLE_SWING. .SLIDING_TO_LEFT. .DOUBLE_PANEL_VERTICAL.].each do |op|
+          assert(text.include?(op), "#{op} mancante")
+        end
+        'OperationType e PartitioningType presenti'
       end
     end
 

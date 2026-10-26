@@ -684,8 +684,9 @@ module BIMSketch
     end
 
     # Inserisce una porta o una finestra in un muro parametrico: taglia il
-    # foro nel muro e crea l'elemento nel vano.
-    def opening(model, wall, kind, local_x, width, height, sill)
+    # foro nel muro e crea l'elemento nel vano. type_id: tipologia
+    # (OpeningTypes) che ne stabilisce la forma; nil = quella predefinita.
+    def opening(model, wall, kind, local_x, width, height, sill, type_id: nil)
       rect = opening_rect(wall, local_x, width, height, sill)
       return nil unless rect
 
@@ -705,7 +706,8 @@ module BIMSketch
       wall_tr = wall.transformation
       t = g[:thickness]
       _sx, sy, = Geometry.scales(wall_tr)
-      depth = [kind == 'door' ? 50.mm : 80.mm, t * sy].min
+      depth = [kind == 'door' ? 100.mm : 80.mm, t * sy].min
+      type = OpeningTypes.for_kind(kind, type_id)
       origin = Geom::Point3d.new(a, t / 2.0, c).transform(wall_tr)
       xaxis = X_AXIS.transform(wall_tr)
       world_origin = origin.offset(Z_AXIS * xaxis.normalize, -depth / 2.0)
@@ -716,12 +718,14 @@ module BIMSketch
       h_world = (d - c) * Geometry.scales(wall_tr)[2]
       group = Geometry.create_group(model, tr) do |ents|
         if kind == 'door'
-          Geometry.box(ents, w_world, depth, h_world)
+          build_door(model, ents, type, w_world, depth, h_world)
         else
-          build_window(model, ents, w_world, depth, h_world)
+          build_window(model, ents, type, w_world, depth, h_world)
         end
       end
-      finish(model, group, kind, { 'host' => BimData.guid(wall) }, level: BimData.level_id(wall))
+      finish(model, group, kind, { 'host' => BimData.guid(wall), 'opening_type' => type['id'],
+                                   'operation' => type['operation'] }, level: BimData.level_id(wall))
+      group.set_attribute(BimData::DICT, 'object_type', type['name'])
       external = BimData.json_attr(wall, 'props')['IsExternal']
       unless external.nil?
         props = BimData.json_attr(group, 'props').merge('IsExternal' => external)
@@ -730,16 +734,65 @@ module BIMSketch
       group
     end
 
-    def build_window(model, ents, width, depth, height)
-      profile = [60.mm, [width, height].min / 4.0].min
-      Geometry.frame(ents, width, height, profile, depth)
-      glass = ents.add_group
-      g_depth = 8.mm
-      g_tr = Geom::Transformation.translation([profile, (depth - g_depth) / 2.0, profile])
-      Geometry.box(glass.entities, width - 2 * profile, g_depth, height - 2 * profile)
-      glass.transformation = g_tr
-      glass.material = glass_material(model)
-      glass
+    # Porta: telaio a U (senza traverso a terra) e ante piene, scorrevoli o vetrate.
+    def build_door(model, ents, type, width, depth, height)
+      glazed = type['style'] == 'glazed'
+      f = [60.mm, width / 6.0].min
+      frame_mat = glazed ? part_material(model, 'BIM Telaio serramento', [238, 238, 232]) :
+                           part_material(model, 'BIM Telaio porta', [115, 80, 50])
+      Geometry.part(ents, 'Telaio', frame_mat) do |e|
+        Geometry.extrude_xz(e, [[0, 0], [f, 0], [f, height - f], [width - f, height - f], [width - f, 0],
+                                [width, 0], [width, height], [0, height]], depth)
+      end
+      z0 = 10.mm
+      lh = height - f - 3.mm - z0
+      lt = [45.mm, depth * 0.8].min
+      y = type['style'] == 'sliding' ? 0 : (depth - lt) / 2.0
+      OpeningTypes.leaf_spans(width - 2 * f - 6.mm, type['leaves'], 4.mm).each do |x0, x1|
+        x = f + 3.mm + x0
+        if glazed
+          sash(model, ents, x, y, z0, x1 - x0, lt, lh, 70.mm, frame_mat)
+        else
+          Geometry.part(ents, 'Anta', part_material(model, 'BIM Anta porta', [175, 125, 80]), [x, y, z0]) do |e|
+            Geometry.box(e, x1 - x0, lt, lh)
+          end
+        end
+      end
+    end
+
+    # Finestra: telaio fisso con ante vetrate (o vetro fisso).
+    def build_window(model, ents, type, width, depth, height)
+      f = [60.mm, width / 6.0, height / 6.0].min
+      frame_mat = part_material(model, 'BIM Telaio serramento', [238, 238, 232])
+      Geometry.part(ents, 'Telaio', frame_mat) { |e| Geometry.frame(e, width, height, f, depth) }
+      if type['style'] == 'fixed' || type['leaves'].to_i < 1
+        glass_pane(model, ents, f, depth / 2.0, f, width - 2 * f, height - 2 * f)
+        return
+      end
+      st = depth * 0.75
+      y = (depth - st) / 2.0
+      OpeningTypes.leaf_spans(width - 2 * f, type['leaves'], 2.mm).each do |x0, x1|
+        sash(model, ents, f + x0, y, f, x1 - x0, st, height - 2 * f, 50.mm, frame_mat)
+      end
+    end
+
+    # Anta vetrata: telaio dell'anta (profilo p, spessore t) e vetro al centro.
+    def sash(model, ents, x, y, z, width, t, height, p, material)
+      p = [p, width / 4.0, height / 4.0].min
+      Geometry.part(ents, 'Anta', material, [x, y, z]) { |e| Geometry.frame(e, width, height, p, t) }
+      glass_pane(model, ents, x + p, y + t / 2.0, z + p, width - 2 * p, height - 2 * p)
+    end
+
+    # Vetro di 8 mm centrato in y = y_mid.
+    def glass_pane(model, ents, x, y_mid, z, width, height)
+      g = 8.mm
+      Geometry.part(ents, 'Vetro', glass_material(model), [x, y_mid - g / 2.0, z]) do |e|
+        Geometry.box(e, width, g, height)
+      end
+    end
+
+    def part_material(model, name, rgb)
+      model.materials[name] || model.materials.add(name).tap { |m| m.color = Sketchup::Color.new(*rgb) }
     end
 
     def glass_material(model)

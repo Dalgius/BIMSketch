@@ -51,7 +51,8 @@ module BIMSketch
                                    "#{type_label}Tasto destro: impostazioni."
                                else
                                  'Muro: clic sul punto finale o digita la lunghezza. I muri si ' \
-                                   'agganciano alle estremità dei muri esistenti; doppio clic, Invio o Esc per terminare.'
+                                   'agganciano alle estremità (angolo) o al corpo (giunto a T) dei muri esistenti; ' \
+                                   'doppio clic, Invio o Esc per terminare.'
                                end
         Sketchup.vcb_label = 'Lunghezza'
       end
@@ -112,8 +113,11 @@ module BIMSketch
       end
 
       # Punto agganciato all'estremità di un muro esistente, se vicino.
+      # Punto agganciato all'estremità di un muro esistente, oppure al suo asse
+      # se cade sul corpo del muro (giunto a T).
       def snapped(pt)
-        hit = Builder.wall_end_near(model, pt, Builder.snap_tolerance(thickness))
+        hit = Builder.wall_end_near(model, pt, Builder.snap_tolerance(thickness)) ||
+              Builder.wall_side_near(model, pt, thickness)
         hit ? Geom::Point3d.new(hit[:point].x, hit[:point].y, pt.z) : pt
       end
     end

@@ -16,7 +16,7 @@
 require 'tmpdir'
 
 module BIMSketchAutotest
-  IN3_TO_M3 = 0.0254**3
+  IN3_TO_M3 = 0.0254**3 unless const_defined?(:IN3_TO_M3)
 
   @results = []
 
@@ -100,6 +100,7 @@ module BIMSketchAutotest
       run_other_elements
       run_classification
       run_wall_types
+      run_tee_joints
       run_data_and_export
       run_ui
       report
@@ -456,6 +457,53 @@ module BIMSketchAutotest
         eps = takeoff.find { |r| r['material'] == 'EPS con grafite' }
         assert(eps, 'materiale isolante assente dal computo')
         "#{text.scan('=IFCMATERIALLAYERSET(').size} stratigrafie IFC, isolante #{format('%.3f', eps['volume'])} m³"
+      end
+    end
+
+    def run_tee_joints
+      puts "\n[Giunti a T]"
+      b = BIMSketch::Builder
+      check('Muro che termina sul corpo di un altro (T perpendicolare)') do
+        model.start_operation('Autotest T', true)
+        host = b.wall(model, pt(0, 100, 0), pt(6, 100, 0), 0.3.m, 3.m, 'center')
+        # Clic finale 10 cm dentro il muro principale: il punto va proiettato sul suo asse.
+        res = b.wall_connected(model, pt(3, 103, 0), pt(3, 100.1, 0), 0.3.m, 3.m, 'center')
+        model.commit_operation
+        @e[:tee_host] = host
+        @e[:tee_a] = res[:wall]
+        assert(res[:joined_end], 'il muro non si è agganciato al muro principale')
+        p2 = b.wall_params(model, res[:wall])[:p2]
+        [approx(p2.y.to_m, 100.0, 0.001, 'aggancio sull\'asse'),
+         approx(p2.x.to_m, 3.0, 0.001, 'aggancio x'),
+         approx(volume_m3(res[:wall]), 2.85 * 0.3 * 3, 0.002, 'volume muro a T'),
+         approx(volume_m3(host), 6 * 0.3 * 3, 0.002, 'muro principale invariato')].join(', ')
+      end
+      check('Muro che parte dal corpo di un altro') do
+        model.start_operation('Autotest T inizio', true)
+        res = b.wall_connected(model, pt(1.5, 99.9, 0), pt(1.5, 97, 0), 0.3.m, 3.m, 'center')
+        model.commit_operation
+        @e[:tee_b] = res[:wall]
+        approx(volume_m3(res[:wall]), 2.85 * 0.3 * 3, 0.002, 'volume')
+      end
+      check('Giunto a T obliquo') do
+        model.start_operation('Autotest T obliquo', true)
+        res = b.wall_connected(model, pt(4, 103, 0), pt(5.02, 100.05, 0), 0.3.m, 3.m, 'center')
+        model.commit_operation
+        j = BIMSketch::WallJoint
+        a = [4.0, 3.0]
+        e = [5.02, 0.0]
+        d = j.direction(a, e)
+        s_tee = j.tee(e, d, [-0.15, 0.15], [0.0, 0.0], [1.0, 0.0], 0.15)
+        area = j.area(j.footprint(Math.hypot(e[0] - a[0], e[1] - a[1]), 0.3, [0, 0, s_tee[0], s_tee[1]]))
+        approx(volume_m3(res[:wall]), area * 3, 0.002, 'volume')
+      end
+      check('Il muro a T segue il cambio di spessore del muro principale') do
+        model.start_operation('Autotest T tipologia', true)
+        ok = b.apply_wall_type(model, @e[:tee_host], 'WT1')
+        model.commit_operation
+        assert(ok, 'tipologia non applicata al muro principale')
+        [approx(volume_m3(@e[:tee_a]), (3 - 0.2125) * 0.3 * 3, 0.002, 'volume muro a T'),
+         approx(volume_m3(@e[:tee_b]), (3 - 0.2125) * 0.3 * 3, 0.002, 'volume muro opposto')].join(', ')
       end
     end
 

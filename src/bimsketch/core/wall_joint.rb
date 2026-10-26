@@ -78,6 +78,44 @@ module BIMSketch
       [ends, starts]
     end
 
+    # Giunto a T: il muro N (direzione d_n, fascia band_n) ha un estremo nel
+    # punto point, sull'asse del muro ospite H (punto h_point sull'asse,
+    # direzione d_h); face_offset è lo scostamento (lungo la normale sinistra
+    # di H) della faccia di H rivolta verso N. Restituisce [s_lo, s_hi]: dove
+    # le facce lo e hi di N incontrano quella faccia, misurato lungo d_n da
+    # point (negativo = prima del punto). nil se i muri sono paralleli.
+    def tee(point, d_n, band_n, h_point, d_h, face_offset)
+      cross = d_n[0] * d_h[1] - d_n[1] * d_h[0]
+      return nil if cross.abs < MIN_SIN
+
+      n_n = [-d_n[1], d_n[0]]
+      n_h = [-d_h[1], d_h[0]]
+      b = [h_point[0] + face_offset * n_h[0], h_point[1] + face_offset * n_h[1]]
+      band_n.map do |u|
+        a = [point[0] + u * n_n[0], point[1] + u * n_n[1]]
+        q = [b[0] - a[0], b[1] - a[1]]
+        (q[0] * d_h[1] - q[1] * d_h[0]) / cross
+      end
+    end
+
+    # Faccia del muro ospite rivolta verso il punto "toward": restituisce lo
+    # scostamento lo o hi della sua fascia.
+    def facing_offset(h_point, d_h, band_h, toward)
+      n_h = [-d_h[1], d_h[0]]
+      side = (toward[0] - h_point[0]) * n_h[0] + (toward[1] - h_point[1]) * n_h[1]
+      side >= 0 ? band_h[1] : band_h[0]
+    end
+
+    # Proiezione di p sull'asse del muro da a a b: [distanza dall'asse,
+    # posizione lungo il muro (0..lunghezza), punto proiettato].
+    def project(p, a, b)
+      d = direction(a, b)
+      len = Math.hypot(b[0] - a[0], b[1] - a[1])
+      t = (p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]
+      q = [a[0] + t * d[0], a[1] + t * d[1]]
+      [Math.hypot(p[0] - q[0], p[1] - q[1]), t, q, len]
+    end
+
     def direction(p, q)
       dx = q[0] - p[0]
       dy = q[1] - p[1]

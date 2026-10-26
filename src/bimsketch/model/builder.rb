@@ -182,6 +182,84 @@ module BIMSketch
       thickness * 1.5
     end
 
+    # Giunto a T: muro parametrico (diverso da exclude) sul cui corpo cade il
+    # punto, lontano dalle sue estremità. extra allarga la fascia del muro.
+    # Restituisce { wall:, point: (proiezione sull'asse), params: } o nil.
+    def wall_side_near(model, point, extra, exclude = nil, on_axis: false)
+      best = nil
+      model.active_entities.each do |e|
+        next if e == exclude || !parametric_wall?(e)
+
+        pr = wall_params(model, e)
+        next if pr.nil? || (pr[:p1].z - point.z).abs > 1.mm
+
+        a = [pr[:p1].x.to_f, pr[:p1].y.to_f]
+        b = [pr[:p2].x.to_f, pr[:p2].y.to_f]
+        dist, t, q, len = WallJoint.project([point.x.to_f, point.y.to_f], a, b)
+        next unless t > Geometry::TOL && t < len - Geometry::TOL
+
+        d = WallJoint.direction(a, b)
+        offset = (point.x - q[0]) * -d[1] + (point.y - q[1]) * d[0]
+        lo, hi = WallJoint.band(pr[:align], pr[:thickness].to_f)
+        inside = on_axis ? dist < 1.mm : offset >= lo - extra && offset <= hi + extra
+        next unless inside
+
+        best = [dist, { wall: e, point: Geom::Point3d.new(q[0], q[1], point.z), params: pr }] if best.nil? || dist < best[0]
+      end
+      best && best[1]
+    end
+
+    # Taglia l'estremità "at" del muro sulla faccia del muro ospite il cui asse
+    # passa per quell'estremità (giunto a T). Il muro ospite non cambia.
+    # Restituisce true se il giunto è stato applicato.
+    def apply_tee(model, wall, at)
+      pr = wall_params(model, wall)
+      return false unless pr
+
+      host = wall_side_near(model, pr[at], 0, wall, on_axis: true)
+      return false unless host
+
+      hp = host[:params]
+      h1 = [hp[:p1].x.to_f, hp[:p1].y.to_f]
+      d_h = planar_dir(hp[:p1], hp[:p2])
+      band_h = WallJoint.band(hp[:align], hp[:thickness].to_f)
+      other = at == :p1 ? pr[:p2] : pr[:p1]
+      face = WallJoint.facing_offset(h1, d_h, band_h, [other.x.to_f, other.y.to_f])
+      point = [pr[at].x.to_f, pr[at].y.to_f]
+      s = WallJoint.tee(point, planar_dir(pr[:p1], pr[:p2]), WallJoint.band(pr[:align], pr[:thickness].to_f),
+                        h1, d_h, face)
+      return false unless s
+
+      ext = pr[:ext].dup
+      if at == :p1
+        ext[0] = -s[0]
+        ext[1] = -s[1]
+      else
+        ext[2] = s[0]
+        ext[3] = s[1]
+      end
+      reshape_wall(model, wall, ext)
+    end
+
+    # Ricalcola i giunti a T dei muri che terminano sul muro ospite (dopo un
+    # cambio del suo spessore).
+    def retee_attached(model, host)
+      hp = wall_params(model, host)
+      return unless hp
+
+      model.active_entities.to_a.each do |e|
+        next if e == host || !parametric_wall?(e)
+
+        pr = wall_params(model, e)
+        next unless pr
+
+        %i[p1 p2].each do |at|
+          h = wall_side_near(model, pr[at], 0, e, on_axis: true)
+          apply_tee(model, e, at) if h && h[:wall] == host
+        end
+      end
+    end
+
     # Raccorda a quartabuono due muri che si incontrano: "arriving" ha
     # l'estremità arr_end nell'angolo, "leaving" l'estremità lea_end (un muro
     # che parte dall'angolo con :p2 viene considerato percorso al contrario).
@@ -231,6 +309,8 @@ module BIMSketch
             join_ends(model, o[:wall], o[:at], wall, :p1)
           end
         elsif others.empty?
+          next if apply_tee(model, wall, at)
+
           ext = pr[:ext].dup
           if at == :p1
             ext[0] = ext[1] = 0.0
@@ -245,7 +325,8 @@ module BIMSketch
     # Muro da p1 a p2 che si aggancia ai muri esistenti: se un estremo cade
     # vicino all'estremità di un altro muro parametrico, il punto viene
     # portato sull'asse di quel muro e l'angolo viene raccordato a quartabuono
-    # (anche il muro esistente viene adattato). Restituisce
+    # (anche il muro esistente viene adattato); se cade sul corpo di un muro,
+    # il nuovo muro si ferma sulla sua faccia (giunto a T). Restituisce
     # { wall:, end_point:, joined_end: }.
     def wall_connected(model, p1, p2, thickness, height, align = 'center', auto_height: true,
                        type_id: nil, flipped: false)
@@ -254,8 +335,12 @@ module BIMSketch
       tol = snap_tolerance(thickness)
       start_hit = wall_end_near(model, p1, tol)
       p1 = start_hit[:point] if start_hit
+      start_tee = start_hit ? nil : wall_side_near(model, p1, thickness)
+      p1 = start_tee[:point] if start_tee
       end_hit = wall_end_near(model, p2, tol, start_hit && start_hit[:wall])
       p2 = Geom::Point3d.new(end_hit[:point].x, end_hit[:point].y, p1.z) if end_hit
+      end_tee = end_hit ? nil : wall_side_near(model, p2, thickness, start_tee && start_tee[:wall])
+      p2 = Geom::Point3d.new(end_tee[:point].x, end_tee[:point].y, p1.z) if end_tee
       return nil if Math.hypot(p2.x - p1.x, p2.y - p1.y) < Geometry::TOL
 
       group = wall(model, p1, p2, thickness, height, align, auto_height: auto_height,
@@ -264,7 +349,9 @@ module BIMSketch
 
       join_ends(model, start_hit[:wall], start_hit[:at], group, :p1) if start_hit
       join_ends(model, group, :p2, end_hit[:wall], end_hit[:at]) if end_hit
-      { wall: group, end_point: p2, joined_end: !end_hit.nil? }
+      apply_tee(model, group, :p1) if start_tee
+      apply_tee(model, group, :p2) if end_tee
+      { wall: group, end_point: p2, joined_end: !(end_hit || end_tee).nil? }
     end
 
     def planar_dir(p, q)
@@ -296,6 +383,7 @@ module BIMSketch
       return false unless pr && reshape_wall(model, wall, pr[:ext], type_id: type_id, flipped: flipped)
 
       rejoin_wall(model, wall)
+      retee_attached(model, wall)
       type = wall_type(model, wall)
       apply_type_data(model, wall, type) if type
       true

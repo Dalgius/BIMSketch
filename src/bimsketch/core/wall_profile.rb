@@ -68,6 +68,31 @@ module BIMSketch
       end
     end
 
+    # Vani allargati per il risvolto della finitura: ogni apertura [a, b, c, d]
+    # si allarga di r su ogni lato (non in basso per le porte), senza uscire
+    # da [x0, x1] x [z0, z1] e fermandosi a metà della distanza dalle aperture
+    # vicine. Restituisce i vani [A, B, C, D] nello stesso ordine.
+    def reveal_rects(openings, r, x0, x1, z0, z1, eps)
+      openings.each_with_index.map do |(a, b, c, d), i|
+        others = openings.each_with_index.reject { |_, j| j == i }.map(&:first)
+        left = [r, a - x0 - eps].min
+        right = [r, x1 - b - eps].min
+        top = [r, z1 - d - eps].min
+        bottom = door?([a, b, c, d], z0, eps) ? 0.0 : [r, c - z0 - eps].min
+        others.each do |a2, b2, c2, d2|
+          if c < d2 && d > c2 # affiancate
+            left = [left, (a - b2) / 2.0 - eps].min if b2 <= a
+            right = [right, (a2 - b) / 2.0 - eps].min if a2 >= b
+          end
+          next unless a < b2 && b > a2 # sovrapposte in pianta
+
+          top = [top, (c2 - d) / 2.0 - eps].min if c2 >= d
+          bottom = [bottom, (c - d2) / 2.0 - eps].min if d2 <= c && bottom.positive?
+        end
+        [a - [left, 0.0].max, b + [right, 0.0].max, c - [bottom, 0.0].max, d + [top, 0.0].max]
+      end
+    end
+
     # Volume netto atteso (box meno aperture), nelle stesse unità.
     def net_volume(x0, x1, y0, y1, z0, z1, openings)
       gross = (x1 - x0) * (y1 - y0) * (z1 - z0)

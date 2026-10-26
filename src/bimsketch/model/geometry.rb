@@ -102,21 +102,58 @@ module BIMSketch
     # layers: fasce degli strati [[y0, y1, nome, materiale SketchUp], ...]:
     # ogni strato diventa un gruppo annidato con il suo materiale; senza
     # strati il muro è un unico solido.
-    def build_wall(ents, length, thickness, height, ext, openings, layers: nil)
+    # reveals: risvolto delle finiture nelle aperture { r:, splits:, mat_lo:,
+    # mat_hi: }: negli strati i vani si allargano di r e le finiture delle due
+    # facce rivestono spallette, architrave e davanzale fino al piano del
+    # serramento (splits[i], y nel muro, per ogni apertura).
+    def build_wall(ents, length, thickness, height, ext, openings, layers: nil, reveals: nil)
       if layers.nil? || layers.empty?
         build_wall_band(ents, length, thickness, 0.0, thickness, height, ext, openings)
         return true
       end
+      eps = TOL * 10
+      cut = openings
+      if reveals && reveals[:r].to_f > eps && !openings.empty?
+        x0, x1 = WallJoint.core_range(length.to_f, ext)
+        cut = WallProfile.reveal_rects(openings, reveals[:r].to_f, x0, x1, 0.0, height.to_f, eps)
+      end
       layers.each_with_index do |(y0, y1, name, material), i|
-        next if y1 - y0 < TOL * 10
+        next if y1 - y0 < eps
 
         sub = ents.add_group
-        build_wall_band(sub.entities, length, thickness, y0, y1, height, ext, openings)
+        build_wall_band(sub.entities, length, thickness, y0, y1, height, ext, cut)
         sub.name = name.to_s
         sub.material = material if material
         sub.set_attribute('BIMSketch', 'layer', i)
       end
+      return true if cut.equal?(openings)
+
+      openings.each_with_index do |o, i|
+        split = (reveals[:splits][i] || thickness / 2.0).to_f.clamp(0.0, thickness.to_f)
+        [[0.0, split, reveals[:mat_lo]], [split, thickness.to_f, reveals[:mat_hi]]].each do |y0, y1, mat|
+          build_reveal(ents, o, cut[i], y0, y1, mat) if y1 - y0 > eps
+        end
+      end
       true
+    end
+
+    # Risvolto di un'apertura o = [a, b, c, d] nel vano allargato e = [A, B,
+    # C, D], da y0 a y1: spallette, architrave e (finestre) davanzale, come
+    # strisce separate che rivestono il vano.
+    def build_reveal(ents, o, e, y0, y1, material)
+      a, b, c, d = o
+      aa, bb, cc, dd = e
+      eps = TOL * 10
+      strips = [[aa, a, cc, dd], [b, bb, cc, dd], [a, b, d, dd], [a, b, cc, c]]
+      strips = strips.select { |x0, x1, z0, z1| x1 - x0 > eps && z1 - z0 > eps }
+      return if strips.empty?
+
+      part(ents, 'Risvolto', material) do |pe|
+        strips.each do |x0, x1, z0, z1|
+          g = pe.add_group
+          prism(g.entities, [pt(x0, y0, z0), pt(x1, y0, z0), pt(x1, y1, z0), pt(x0, y1, z0)], [], z1 - z0)
+        end
+      end
     end
 
     # Geometria di un solaio nel suo sistema locale: il contorno outline (e i

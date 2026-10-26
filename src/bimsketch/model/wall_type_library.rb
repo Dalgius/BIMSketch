@@ -49,6 +49,15 @@ module BIMSketch
       end
     end
 
+    # Finiture sulle due facce del muro (y = 0 e y = thickness), per il
+    # risvolto nelle aperture: r_lo / r_hi spessori (0 se lo strato sulla
+    # faccia non è una finitura), lo / hi strati sulle due facce.
+    def reveal_info(type, thickness, flipped)
+      bands = WallTypes.bands(type, thickness, flipped: flipped)
+      fin = ->(band) { band[2]['function'] == 'finish' ? band[1] - band[0] : 0.0 }
+      { r_lo: fin.call(bands.first), r_hi: fin.call(bands.last), lo: bands.first[2], hi: bands.last[2] }
+    end
+
     # Fasce degli strati per Geometry.build_slab: [[z0, z1, nome, materiale], ...]
     # dall'intradosso (z = 0), alte in totale thickness (unità interne).
     def slab_layers(model, type, thickness)

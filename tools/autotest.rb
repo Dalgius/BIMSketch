@@ -99,6 +99,7 @@ module BIMSketchAutotest
       run_openings
       run_opening_types
       run_sketchup_move
+      run_reveals
       run_other_elements
       run_level_change
       run_classification
@@ -565,7 +566,8 @@ module BIMSketchAutotest
         w1 = find_opening(wall, 'W1')
         _, msgs = sketchup_move(w1, Geom::Vector3d.new(0, 3.m, 0))
         assert(msgs.size == 1, "messaggi: #{msgs.inspect}")
-        approx(w1.bounds.center.y.to_m, 150.0, 0.01, 'di nuovo nel muro')
+        # Finestra a filo interno: telaio di 8 cm contro la faccia y = 150,15.
+        approx(w1.bounds.center.y.to_m, 150.11, 0.002, 'di nuovo nel muro')
       end
       check('Copia con Ctrl: diventa una nuova finestra') do
         w1 = find_opening(wall, 'W1')
@@ -591,7 +593,75 @@ module BIMSketchAutotest
         _, msgs = sketchup_move(wall, Geom::Vector3d.new(0, 0.5.m, 0))
         assert(msgs.empty?, msgs.join(' '))
         assert(BIMSketch::OpeningSync.candidates(model).empty?, 'aperture rimaste indietro')
-        approx(find_opening(wall, 'W2').bounds.center.y.to_m, 150.5, 0.01, 'finestra a due ante')
+        approx(find_opening(wall, 'W2').bounds.center.y.to_m, 150.61, 0.002, 'finestra a due ante')
+      end
+    end
+
+    def reveals_of(wall)
+      wall.definition.entities.select { |e| e.is_a?(Sketchup::Group) && e.get_attribute('BIMSketch', 'part') == 'Risvolto' }
+    end
+
+    # Coordinate y (m) dell'apertura nel sistema locale del muro.
+    def local_y_range(wall, opening)
+      inv = wall.transformation.inverse
+      ys = (0..7).map { |i| opening.bounds.corner(i).transform(inv).y.to_m }
+      [ys.min, ys.max]
+    end
+
+    def run_reveals
+      puts "\n[Risvolti]"
+      b = BIMSketch::Builder
+      check('Finestra in muro a strati: le finiture risvoltano nel vano') do
+        model.start_operation('Autotest risvolti', true)
+        w = b.wall(model, pt(0, 170, 0), pt(5, 170, 0), 0.3.m, 3.m, 'center', type_id: 'WT1')
+        win = b.opening(model, w, 'window', 3.2.m, 1.2.m, 1.4.m, 0.9.m, type_id: 'W2')
+        model.commit_operation
+        @e[:reveal_wall] = w
+        @e[:reveal_window] = win
+        rv = reveals_of(w)
+        assert(rv.size == 2, "risvolti: #{rv.size}")
+        mats = rv.map { |g| g.material && g.material.display_name }.sort
+        assert(mats == ['BIM Strato - Intonaco di calce e gesso', 'BIM Strato - Rasante minerale'],
+               "materiali: #{mats.inspect}")
+        ring = (1.23 * 1.43 - 1.2 * 1.4) * 0.425
+        y0, y1 = local_y_range(w, win)
+        [approx(volume_m3(w), 5 * 0.425 * 3 - 1.2 * 1.4 * 0.425, 0.002, 'volume muro'),
+         approx(rv.sum { |g| volume_m3(g) || 0 }, ring, 0.0005, 'volume risvolti'),
+         approx(y1, 0.41, 0.001, 'telaio a filo interno (sotto l\'intonaco)'),
+         approx(y1 - y0, 0.08, 0.001, 'profondità telaio')].join(', ')
+      end
+      check('Porta al centro nello stesso muro') do
+        w = @e[:reveal_wall]
+        model.start_operation('Autotest risvolti porta', true)
+        d = b.opening(model, w, 'door', 1.0.m, 0.9.m, 2.1.m, 0, type_id: 'D1')
+        model.commit_operation
+        y0, y1 = local_y_range(w, d)
+        assert(reveals_of(w).size == 4, "risvolti: #{reveals_of(w).size}")
+        [approx(volume_m3(w), 5 * 0.425 * 3 - (1.2 * 1.4 + 0.9 * 2.1) * 0.425, 0.002, 'volume muro'),
+         approx((y0 + y1) / 2, 0.2125, 0.001, 'porta centrata')].join(', ')
+      end
+      check('Serramento spostato a filo esterno') do
+        w = @e[:reveal_wall]
+        win = @e[:reveal_window]
+        model.start_operation('Autotest filo esterno', true)
+        ok = b.set_depth_position(model, win, 'outer')
+        model.commit_operation
+        assert(ok, 'posizione non cambiata')
+        assert(b.depth_position(win) == 'outer', 'posizione non registrata')
+        y0, = local_y_range(w, win)
+        [approx(y0, 0.01, 0.001, 'telaio a filo esterno (sotto la rasatura)'),
+         approx(volume_m3(w), 5 * 0.425 * 3 - (1.2 * 1.4 + 0.9 * 2.1) * 0.425, 0.002, 'volume muro')].join(', ')
+      end
+      check('Cambio stratigrafia del muro: le aperture si adeguano') do
+        w = @e[:reveal_wall]
+        model.start_operation('Autotest cambio stratigrafia con aperture', true)
+        ok = b.apply_wall_type(model, w, 'WT2')
+        model.commit_operation
+        assert(ok, 'stratigrafia non applicata')
+        assert(BIMSketch::OpeningSync.candidates(model).empty?, 'aperture fuori posto')
+        y0, = local_y_range(w, @e[:reveal_window])
+        [approx(volume_m3(w), 5 * 0.33 * 3 - (1.2 * 1.4 + 0.9 * 2.1) * 0.33, 0.002, 'volume muro (33 cm)'),
+         approx(y0, 0.015, 0.001, 'telaio a filo esterno (sotto l\'intonaco)')].join(', ')
       end
     end
 

@@ -29,4 +29,22 @@ class OpeningTypesTest < Minitest::Test
     assert_in_delta 1.0, spans[1][1], 1e-12
     assert_equal [[0.0, 1.0]], O.leaf_spans(1.0, 0)
   end
+
+  def test_position
+    assert_equal 'inner', O.position(O.find('W2'))
+    assert_equal 'center', O.position(O.find('D1'))
+    assert_equal 'outer', O.position(O.find('W2'), 'outer')
+    assert_equal 'inner', O.position(O.find('W2'), 'boh')
+  end
+
+  # Wall 0.40 thick, frame 0.08 deep, finishes 0.01 (y = 0) and 0.015 (y = t).
+  def test_frame_offset
+    assert_in_delta 0.16, O.frame_offset(0.4, 0.08, 'center'), 1e-12
+    assert_in_delta 0.305, O.frame_offset(0.4, 0.08, 'inner', r_lo: 0.01, r_hi: 0.015), 1e-12
+    assert_in_delta 0.01, O.frame_offset(0.4, 0.08, 'outer', r_lo: 0.01, r_hi: 0.015), 1e-12
+    # Flipped wall: the interior face is at y = 0.
+    assert_in_delta 0.01, O.frame_offset(0.4, 0.08, 'inner', interior_hi: false, r_lo: 0.01, r_hi: 0.015), 1e-12
+    # A frame deeper than the wall stays inside it.
+    assert_in_delta 0.0, O.frame_offset(0.05, 0.08, 'inner'), 1e-12
+  end
 end

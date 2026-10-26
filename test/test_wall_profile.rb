@@ -44,4 +44,17 @@ class WallProfileTest < Minitest::Test
   def test_net_volume
     assert_in_delta 4.5 - 0.567, W.net_volume(0, 5, 0, 0.3, 0, 3, [[2.05, 2.95, 0, 2.1]]), 1e-9
   end
+
+  def test_reveal_rects
+    eps = 1e-6
+    door = [1.0, 2.0, 0.0, 2.1]
+    window = [3.0, 4.0, 0.9, 2.3]
+    near = [4.02, 5.0, 1.0, 2.0] # 2 cm from the window
+    out = BIMSketch::WallProfile.reveal_rects([door, window, near], 0.015, 0.0, 5.01, 0.0, 3.0, eps)
+    assert_equal [0.985, 2.015, 0.0, 2.115], out[0].map { |v| v.round(6) }
+    assert_in_delta 0.885, out[1][2], 1e-9          # sill lowered
+    assert_in_delta 4.01 - eps, out[1][1], 1e-9     # stops halfway to the neighbour
+    assert_in_delta 4.01 + eps, out[2][0], 1e-9
+    assert_in_delta 5.01 - eps, out[2][1], 1e-9     # stops at the wall end
+  end
 end

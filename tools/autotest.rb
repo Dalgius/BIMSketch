@@ -451,6 +451,44 @@ module BIMSketchAutotest
         assert(!ok, 'cambio accettato anche se la porta non entra')
         approx((door.bounds.max.x - door.bounds.min.x).to_m, 0.9, 0.002, 'larghezza invariata')
       end
+      check('Sposta finestra lungo il muro e cambia davanzale') do
+        b = BIMSketch::Builder
+        wall = @e[:host_window]
+        win = model.entities.find do |e|
+          BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == 'W4' &&
+            e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+        end
+        guid = BIMSketch::BimData.guid(win)
+        vol = volume_m3(wall)
+        n = b.wall_openings(wall).size
+        model.start_operation('Autotest sposta finestra', true)
+        out = b.move_opening(model, win, left: 7.0.m) # 7,00 + 1,00 > 8,00 - 0,01: fuori dal muro
+        moved = b.move_opening(model, win, left: 6.8.m)
+        raised = b.move_opening(model, win, sill: 1.2.m)
+        model.commit_operation
+        assert(!out, 'posizione fuori dal muro accettata')
+        assert(moved && raised, 'spostamento non riuscito')
+        assert(BIMSketch::BimData.guid(win) == guid, 'GlobalId cambiato')
+        assert(b.wall_openings(wall).size == n, "aperture nel muro: #{b.wall_openings(wall).size} invece di #{n}")
+        pos = b.opening_position(model, win)
+        [approx(pos[:left].to_m, 6.8, 0.001, 'distanza dall\'inizio'),
+         approx(win.bounds.min.x.to_m, 6.8, 0.002, 'posizione'),
+         approx(win.bounds.min.z.to_m, 1.2, 0.002, 'davanzale'),
+         approx(volume_m3(wall), vol, 0.002, 'volume muro invariato')].join(', ')
+      end
+      check('Spostamento sopra un\'altra apertura rifiutato') do
+        b = BIMSketch::Builder
+        wall = @e[:host_window]
+        vasistas = model.entities.find do |e|
+          BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == 'W3' &&
+            e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+        end
+        model.start_operation('Autotest sposta sovrapposto', true)
+        ok = b.move_opening(model, vasistas, left: 2.5.m, sill: 0.9.m) # sopra la finestra a due ante
+        model.commit_operation
+        assert(!ok, 'sovrapposizione accettata')
+        approx(vasistas.bounds.min.x.to_m, 3.8, 0.002, 'posizione invariata')
+      end
       check('Tipo di apertura nell\'IFC') do
         records = BIMSketch::Collector.collect(model, mesh: true)
         levels = BIMSketch::Levels.all(model)
@@ -790,7 +828,7 @@ module BIMSketchAutotest
     def run_ui
       puts "\n[Interfaccia]"
       check('Strumenti attivabili') do
-        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new,
+        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new, BIMSketch::Tools::MoveOpeningTool.new,
                  BIMSketch::Tools::ColumnTool.new, BIMSketch::Tools::BeamTool.new,
                  BIMSketch::Tools::OpeningTool.new('door'), BIMSketch::Tools::OpeningTool.new('window')]
         tools.each { |t| model.select_tool(t) }

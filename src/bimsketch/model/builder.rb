@@ -797,6 +797,47 @@ module BIMSketch
       true
     end
 
+    # Posizione di una porta o finestra nel suo muro (unità interne, mondo):
+    # { left: distanza del lato sinistro del vano dall'inizio del muro,
+    #   sill: quota del vano dalla base del muro, width:, height:, wall: } o nil.
+    def opening_position(model, opening)
+      wall = host_wall(model, opening)
+      rect = wall && opening_rect_of(wall, opening)
+      return nil unless rect
+
+      sx, _sy, sz = Geometry.scales(wall.transformation)
+      { left: rect[0] * sx, sill: rect[2] * sz, width: (rect[1] - rect[0]) * sx,
+        height: (rect[3] - rect[2]) * sz, wall: wall, rect: rect }
+    end
+
+    # Sposta una porta o finestra nel suo muro: left = distanza del lato
+    # sinistro del vano dall'inizio del muro, sill = davanzale (solo
+    # finestre); nil lascia il valore attuale. Il foro viene ritagliato nella
+    # nuova posizione. Con strict una posizione fuori dal muro viene
+    # rifiutata, altrimenti l'apertura si ferma al limite del muro.
+    # Restituisce false se l'apertura non entra o si sovrappone a un'altra.
+    def move_opening(model, opening, left: nil, sill: nil, strict: true)
+      kind = BimData.type_key(opening)
+      pos = %w[door window].include?(kind) && opening_position(model, opening)
+      return false unless pos && wall_intact?(pos[:wall])
+
+      wall = pos[:wall]
+      old = pos[:rect]
+      sx = Geometry.scales(wall.transformation)[0]
+      left = (left || pos[:left]).to_f
+      sill = kind == 'door' ? 0 : (sill || pos[:sill]).to_f
+      center = left / sx + (old[1] - old[0]) / 2.0
+      rect = opening_rect(wall, center, pos[:width], pos[:height], sill, ignore: old)
+      return false unless rect
+      return false if strict && (rect[0] * sx - left).abs > 0.5.mm
+      return true if same_rect?(rect, old)
+
+      rebuild_wall_openings(model, wall, wall_openings(wall).map { |r| same_rect?(r, old) ? rect : r })
+      type = OpeningTypes.for_kind(kind, opening.get_attribute(BimData::DICT, 'opening_type'))
+      place_opening(model, opening, wall, kind, rect, type)
+      true
+    end
+
     # Porta: telaio a U (senza traverso a terra) e ante piene, scorrevoli o vetrate.
     def build_door(model, ents, type, width, depth, height)
       glazed = type['style'] == 'glazed'

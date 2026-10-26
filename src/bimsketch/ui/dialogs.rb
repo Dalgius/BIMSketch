@@ -229,6 +229,11 @@ module BIMSketch
         if %w[door window].include?(BimData.type_key(entity)) && Builder.host_wall(model, entity)
           data['opening'] = { 'type_id' => entity.get_attribute(BimData::DICT, 'opening_type').to_s,
                               'types' => opening_types_payload(BimData.type_key(entity)) }
+          pos = Builder.opening_position(model, entity)
+          if pos
+            data['opening']['left'] = pos[:left].to_m.round(4)
+            data['opening']['sill'] = pos[:sill].to_m.round(4) if BimData.type_key(entity) == 'window'
+          end
         end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
@@ -268,6 +273,26 @@ module BIMSketch
           dims += format(', davanzale %d cm', (t['sill'] * 100).round) if t['sill'].positive?
           { 'id' => t['id'], 'name' => "#{t['name']} (#{dims})" }
         end
+      end
+
+      # Posizione di porta o finestra nel muro (campi 'opening_left' e
+      # 'opening_sill' in m, inviati solo se modificati).
+      def apply_opening_position(entity, el)
+        return true unless %w[door window].include?(BimData.type_key(entity))
+
+        left = parse_m(el['opening_left'])
+        sill = parse_m(el['opening_sill'])
+        return true unless left || sill
+
+        Builder.move_opening(model, entity, left: left, sill: sill)
+      end
+
+      def parse_m(value)
+        return nil if value.nil? || value.to_s.strip.empty?
+
+        Float(value.to_s.strip.tr(',', '.')).m
+      rescue ArgumentError, TypeError
+        nil
       end
 
       # Tipologia di porta o finestra (campo 'opening_type_id').
@@ -348,6 +373,7 @@ module BIMSketch
           failed += 1 unless apply_wall_type(elements.first, data['element'] || {})
           failed += 1 unless apply_slab_type(elements.first, data['element'] || {})
           failed += 1 unless apply_opening_type(elements.first, data['element'] || {})
+          failed += 1 unless apply_opening_position(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|

@@ -143,6 +143,21 @@
       options(opts, multi ? '' : o.type_id) + '</select>');
   }
 
+  // Posizione di porta o finestra nel muro (inviata solo se modificata).
+  function renderOpeningPosition(o) {
+    if (o.left === undefined) return '';
+    var html = '<h2>Posizione nel muro</h2><div class="panel">' +
+      row('Distanza dall\'inizio del muro (m)', '<input id="f_opening_left" class="num" data-orig="' + BIM.num(o.left, 3) +
+        '" value="' + BIM.num(o.left, 3) + '">');
+    if (o.sill !== undefined) {
+      html += row('Davanzale (m)', '<input id="f_opening_sill" class="num" data-orig="' + BIM.num(o.sill, 3) +
+        '" value="' + BIM.num(o.sill, 3) + '">');
+    }
+    html += '<div class="muted">Distanza del lato sinistro del vano dall\'inizio del muro (nel verso di disegno). ' +
+      'Il foro viene ritagliato nella nuova posizione; per spostarla a mano usa lo strumento Sposta apertura.</div>';
+    return html + '</div>';
+  }
+
   // Tipologia (ObjectType) nel riquadro principale: per porte e finestre è
   // la tipologia della libreria; per muri e solai con stratigrafia è il
   // nome della stratigrafia (sola lettura).
@@ -194,6 +209,7 @@
     html += renderDims(e.dims, false);
     if (e.wall) html += renderWall(e.wall, false);
     if (e.slab) html += renderSlab(e.slab, false);
+    if (e.opening) html += renderOpeningPosition(e.opening);
     html += '<div id="propsBox">' + renderProps(e.type, e.props, false) + '</div>';
     html += renderCustom(e.custom);
     html += '<h2>Quantità</h2><div class="panel">';
@@ -261,6 +277,10 @@
       var fl = BIM.$('f_wall_flipped');
       el.wall_flipped = fl.type === 'checkbox' ? fl.checked : fl.value;
     }
+    ['left', 'sill'].forEach(function (k) {
+      var f = BIM.$('f_opening_' + k);
+      if (f && f.value !== f.getAttribute('data-orig')) el['opening_' + k] = f.value;
+    });
     var ot = BIM.$('f_opening_type_id');
     if (ot) el.opening_type_id = ot.value;
     var st = BIM.$('f_slab_type_id');

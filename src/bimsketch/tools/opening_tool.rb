@@ -134,5 +134,155 @@ module BIMSketch
         end
       end
     end
+
+    # Strumento Sposta apertura: clic su una porta o finestra, poi la si fa
+    # scorrere lungo il suo muro e si clicca per posarla (oppure si digita
+    # la distanza dello spostamento). Il foro nel muro viene ritagliato.
+    class MoveOpeningTool < BaseTool
+      def onMouseMove(flags, x, y, view)
+        if @opening
+          @ip.pick(view, x, y)
+          update_preview(view)
+        else
+          @hover = pick_opening(view, x, y)
+          super unless @hover
+        end
+        update_ui
+        view.invalidate
+      end
+
+      def onLButtonDown(_flags, x, y, view)
+        if @opening
+          place(@candidate ? @candidate[0] : nil)
+        else
+          start(pick_opening(view, x, y), view, x, y)
+        end
+        update_ui
+        view.invalidate
+      end
+
+      # Distanza digitata: spostamento lungo il muro nel verso del mouse.
+      def onUserText(text, view)
+        return unless @opening
+
+        d = parse_length(text)
+        return unless d
+
+        sx = Geometry.scales(@wall.transformation)[0]
+        sign = @candidate && @candidate[0] < @rect[0] ? -1 : 1
+        place(@rect[0] + sign * d.to_f / sx)
+        update_ui
+        view.invalidate
+      end
+
+      def draw(view)
+        if @hover && !@opening
+          view.drawing_color = PREVIEW_COLOR
+          view.line_width = 3
+          box = @hover.bounds
+          view.draw(GL_LINES, [[0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4],
+                               [0, 4], [1, 5], [2, 6], [3, 7]].flatten.map { |i| box.corner(i).transform(context_tr) })
+        end
+        super
+      end
+
+      protected
+
+      def reset_tool
+        super
+        @opening = nil
+        @wall = nil
+        @rect = nil
+        @candidate = nil
+        @hover = nil
+      end
+
+      def update_ui
+        Sketchup.status_text = if @opening
+                                 'Sposta apertura: muovi lungo il muro e clic per posarla, oppure digita ' \
+                                   'la distanza. Esc per annullare.'
+                               else
+                                 'Sposta apertura: clic su una porta o finestra BIMSketch.'
+                               end
+        Sketchup.vcb_label = 'Distanza'
+        Sketchup.vcb_value = if @candidate
+                               ((@candidate[0] - @rect[0]).abs * Geometry.scales(@wall.transformation)[0]).to_l.to_s
+                             else
+                               ''
+                             end
+      end
+
+      def context_tr
+        model.active_path ? model.edit_transform : Geom::Transformation.new
+      end
+
+      def pick_opening(view, x, y)
+        ph = view.pick_helper
+        ph.do_pick(x, y)
+        (0...ph.count).each do |i|
+          ph.path_at(i).to_a.each do |e|
+            next unless BimData.element?(e) && %w[door window].include?(BimData.type_key(e))
+            return e if Builder.opening_position(model, e)
+          end
+        end
+        nil
+      end
+
+      def start(opening, view, x, y)
+        return UI.beep unless opening
+
+        pos = Builder.opening_position(model, opening)
+        return UI.beep unless pos
+
+        @opening = opening
+        @wall = pos[:wall]
+        @rect = pos[:rect]
+        @ip.pick(view, x, y)
+        @grab = @ip.valid? ? local_x(@ip.position) - @rect[0] : (@rect[1] - @rect[0]) / 2.0
+        update_preview(view)
+      end
+
+      # Nuovo vano per il lato sinistro in a (coordinate locali del muro).
+      def candidate_for(a)
+        sx, _sy, sz = Geometry.scales(@wall.transformation)
+        w = @rect[1] - @rect[0]
+        Builder.opening_rect(@wall, a + w / 2.0, w * sx, (@rect[3] - @rect[2]) * sz, @rect[2] * sz, ignore: @rect)
+      end
+
+      def place(a)
+        rect = a && candidate_for(a)
+        unless rect
+          UI.messagebox("L'apertura non entra in quella posizione o si sovrappone a un'altra apertura.")
+          return
+        end
+        opening = @opening
+        left = rect[0] * Geometry.scales(@wall.transformation)[0]
+        ok = run_operation('BIMSketch: Sposta apertura') do
+          Builder.move_opening(model, opening, left: left, strict: false)
+        end
+        UI.messagebox("L'apertura non è stata spostata: il muro è stato modificato a mano.") if ok == false
+        reset_tool
+      end
+
+      def local_x(world_point)
+        world_point.transform((context_tr * @wall.transformation).inverse).x
+      end
+
+      def update_preview(_view)
+        @preview = []
+        @candidate = nil
+        return unless @opening && @ip.valid?
+
+        @candidate = candidate_for(local_x(@ip.position) - @grab)
+        return unless @candidate
+
+        a, b, c, d = @candidate
+        t = @wall.definition.bounds.max.y
+        tr = context_tr * @wall.transformation
+        @preview = [0, t].map do |y|
+          [[a, y, c], [b, y, c], [b, y, d], [a, y, d]].map { |p| Geom::Point3d.new(p).transform(tr) }
+        end
+      end
+    end
   end
 end

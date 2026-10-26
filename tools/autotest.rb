@@ -357,24 +357,30 @@ module BIMSketchAutotest
     end
 
     def run_level_change
-      check('Cambio livello sposta solaio, muro e finestra') do
+      check('Cambio livello sposta solaio, muro, finestra, pilastro e trave') do
         b = BIMSketch::Builder
         BIMSketch::Levels.set_current(model, 'L0')
+        l0 = BIMSketch::Levels.find(model, 'L0')
         model.start_operation('Autotest cambio livello', true)
         s = b.slab(model, [pt(40, 0, 0), pt(44, 0, 0), pt(44, 3, 0), pt(40, 3, 0)], 0.25.m, 0)
         w = b.wall(model, pt(40, 10, 0), pt(44, 10, 0), 0.3.m, 3.m, 'center')
         win = b.opening(model, w, 'window', 2.m, 1.2.m, 1.4.m, 0.9.m)
+        c = b.column(model, pt(46, 0, 0), 0.3.m, 0.3.m, l0['height'].m)
+        bm = b.beam(model, pt(46, 0, 0), pt(46, 4, 0), 0.3.m, 0.5.m, (l0['elevation'] + l0['height']).m)
         model.commit_operation
         l1 = BIMSketch::Levels.find(model, 'L1')
         model.start_operation('Autotest relocate', true)
-        skipped = BIMSketch::Levels.relocate(model, [s, w], 'L1')
+        skipped = BIMSketch::Levels.relocate(model, [s, w, c, bm], 'L1')
         model.commit_operation
         assert(skipped.zero?, "#{skipped} altezze non adattate")
-        assert([s, w, win].all? { |e| BIMSketch::BimData.level_id(e) == 'L1' }, 'livello non assegnato')
+        assert([s, w, win, c, bm].all? { |e| BIMSketch::BimData.level_id(e) == 'L1' }, 'livello non assegnato')
         [approx(s.bounds.max.z.to_m, l1['elevation'], 0.001, 'estradosso solaio'),
          approx(w.bounds.min.z.to_m, l1['elevation'], 0.001, 'base muro'),
          approx(height_m(w), l1['height'], 0.001, 'altezza muro'),
-         approx(win.bounds.min.z.to_m, l1['elevation'] + 0.9, 0.001, 'davanzale finestra')].join(', ')
+         approx(win.bounds.min.z.to_m, l1['elevation'] + 0.9, 0.001, 'davanzale finestra'),
+         approx(c.bounds.min.z.to_m, l1['elevation'], 0.001, 'base pilastro'),
+         approx(height_m(c), l1['height'], 0.001, 'altezza pilastro'),
+         approx(bm.bounds.max.z.to_m, l1['elevation'] + l1['height'], 0.001, 'estradosso trave')].join(', ')
       end
     end
 

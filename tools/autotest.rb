@@ -993,7 +993,7 @@ module BIMSketchAutotest
     def run_ui
       puts "\n[Interfaccia]"
       check('Strumenti attivabili') do
-        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new, BIMSketch::Tools::MoveOpeningTool.new,
+        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new,
                  BIMSketch::Tools::ColumnTool.new, BIMSketch::Tools::BeamTool.new,
                  BIMSketch::Tools::OpeningTool.new('door'), BIMSketch::Tools::OpeningTool.new('window')]
         tools.each { |t| model.select_tool(t) }

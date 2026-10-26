@@ -71,10 +71,6 @@ module BIMSketch
       window: command('Finestra', 'window', 'Inserisce una finestra in un muro BIMSketch.') {
         select_tool(Tools::OpeningTool.new('window'))
       },
-      move_opening: command('Sposta apertura', 'move_opening',
-                            'Sposta porte e finestre lungo il loro muro (il foro segue).') {
-        select_tool(Tools::MoveOpeningTool.new)
-      },
       from_face: command('Elemento da faccia...', 'face',
                          'Crea solai, coperture, spazi o rivestimenti dalle facce selezionate.') {
         Commands.elements_from_faces
@@ -126,9 +122,9 @@ module BIMSketch
     c = commands
     menu = ::UI.menu('Extensions').add_submenu(EXTENSION_NAME)
     model_menu = menu.add_submenu('Modellazione')
-    %i[wall slab column beam door window move_opening from_face].each { |k| model_menu.add_item(c[k]) }
+    %i[wall slab column beam door window from_face].each { |k| model_menu.add_item(c[k]) }
     menu.add_separator
-    %i[classify properties levels wall_types].each { |k| menu.add_item(c[k]) }
+    %i[properties levels wall_types classify].each { |k| menu.add_item(c[k]) }
     menu.add_separator
     %i[schedule checker ifc csv].each { |k| menu.add_item(c[k]) }
     menu.add_separator
@@ -138,9 +134,9 @@ module BIMSketch
   def setup_toolbar
     c = commands
     tb = ::UI::Toolbar.new(EXTENSION_NAME)
-    %i[wall slab column beam door window move_opening from_face].each { |k| tb.add_item(c[k]) }
+    %i[wall slab column beam door window from_face].each { |k| tb.add_item(c[k]) }
     tb.add_separator
-    %i[classify properties levels wall_types].each { |k| tb.add_item(c[k]) }
+    %i[properties levels wall_types classify].each { |k| tb.add_item(c[k]) }
     tb.add_separator
     %i[schedule checker ifc settings].each { |k| tb.add_item(c[k]) }
     tb.restore

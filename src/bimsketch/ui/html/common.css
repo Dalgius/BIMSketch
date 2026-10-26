@@ -152,9 +152,15 @@ body.app input, body.app textarea { user-select: text; }
 .actions { display: none; gap: 8px; }
 .actions.sel { display: flex; }
 .actions > button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; }
-.statusbar { display: flex; align-items: center; gap: 12px; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
-.statusbar .spacer { flex: 1; }
-.statusbar a { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.app-footer { position: relative; }
+.statusbar { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.statusbar a { display: inline-flex; align-items: center; justify-content: center; gap: 4px; color: var(--muted); padding: 3px 0; border-radius: 4px; }
+.statusbar a:hover { background: var(--hover); }
+.toast {
+  position: absolute; left: 50%; bottom: 100%; transform: translate(-50%, -8px); display: none;
+  background: var(--strong); color: var(--panel); font-size: 11.5px; padding: 4px 10px; border-radius: 12px; white-space: nowrap;
+}
+.toast.on { display: block; }
 .statusbar a:hover { color: var(--accent); text-decoration: none; }
 .statusbar svg { width: 13px; height: 13px; }
 .empty { text-align: center; padding: 26px 12px; color: var(--muted); }
@@ -188,7 +194,9 @@ body.app input, body.app textarea { user-select: text; }
 .level { border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin-bottom: 8px; background: var(--panel); }
 .level.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
 .level-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-.level-head input.name { flex: 1; font-weight: 600; }
+.level-head input.name { flex: 1; font-weight: 600; min-width: 0; }
+button.plan { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+button.plan:hover { background: var(--accent-soft); border-color: var(--accent); }
 .level-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .card table { font-size: 11.5px; }
 .card td { white-space: normal; }

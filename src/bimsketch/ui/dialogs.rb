@@ -232,7 +232,7 @@ module BIMSketch
                  e = elements.first
                  t = BimData.type(e)
                  name = e.name.to_s
-                 "#{t ? t.label : 'Elemento'} selezionato#{name.empty? ? '' : " · #{name}"}"
+                 "Selezione: #{t ? t.label : 'Elemento'}#{name.empty? ? '' : " · #{name}"}"
                elsif elements.size > 1
                  "#{elements.size} elementi BIM selezionati"
                elsif sel.empty?

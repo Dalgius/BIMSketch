@@ -35,7 +35,9 @@
           '<div class="level-head">' +
           '<button class="icon ghost act" data-act="set_current" title="Imposta come livello corrente">' + (cur ? '●' : '○') + '</button>' +
           '<input class="name" value="' + esc(l.name) + '">' +
-          '<span class="tag" title="Elementi sul livello">' + l.count + ' el.</span></div>' +
+          '<span class="tag" title="Elementi sul livello">' + l.count + ' el.</span>' +
+          '<button class="small plan act" data-act="plan_view" title="Crea una scena con la vista in pianta del livello">' +
+          BIM.icon('plan') + 'Vista in pianta</button></div>' +
           '<div class="grid2">' +
           BIM.ui.field('Quota (m)', '<div class="unit"><input class="elev num" value="' + BIM.num(l.elevation, 3) + '"><span>m</span></div>') +
           BIM.ui.field('Altezza (m)', '<div class="unit"><input class="height num" value="' + BIM.num(l.height, 3) + '"><span>m</span></div>') +
@@ -43,7 +45,6 @@
           button('select', 'Seleziona', 'Seleziona gli elementi del livello') +
           button('isolate', 'Isola', 'Mostra solo questo livello') +
           button('assign', 'Assegna', 'Assegna la selezione a questo livello') +
-          button('plan_view', 'Pianta', 'Crea una scena con la vista in pianta') +
           button('delete', 'Elimina', 'Elimina il livello', 'ghost danger') +
           '</div></div>';
       });

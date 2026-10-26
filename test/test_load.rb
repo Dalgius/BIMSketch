@@ -21,6 +21,8 @@ $stub_calls = Hash.new(0)
 
 module Sketchup
   class SelectionObserver; end
+  class ModelObserver; end
+  class AppObserver; end
   class Color < Anything; end
   class Group; end
   class ComponentInstance; end

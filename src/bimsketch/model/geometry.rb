@@ -43,6 +43,28 @@ module BIMSketch
       face
     end
 
+    # Profilo nel piano xz (punti [x, z]) estruso in y per d.
+    def extrude_xz(ents, points, d)
+      face = ents.add_face(points.map { |x, z| pt(x, 0, z) })
+      return nil unless face
+
+      face.reverse! if face.normal.y > 0
+      face.pushpull(-d)
+      face
+    end
+
+    # Parte di una porta o finestra (telaio, anta, vetro): gruppo annidato con
+    # il suo materiale, spostato di offset [x, y, z]; il blocco ne riceve le entità.
+    def part(ents, name, material, offset = [0, 0, 0])
+      g = ents.add_group
+      yield g.entities
+      g.transformation = Geom::Transformation.translation(offset)
+      g.name = name
+      g.material = material if material
+      g.set_attribute('BIMSketch', 'part', name)
+      g
+    end
+
     # Crea un nuovo gruppo nel contesto attivo con la trasformazione (in
     # coordinate mondo) indicata; il blocco riceve le entità del gruppo.
     def create_group(model, transformation)

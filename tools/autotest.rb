@@ -97,7 +97,10 @@ module BIMSketchAutotest
       run_walls
       run_separate_walls
       run_openings
+      run_opening_types
+      run_sketchup_move
       run_other_elements
+      run_level_change
       run_classification
       run_wall_types
       run_slab_types
@@ -352,6 +355,243 @@ module BIMSketchAutotest
         model.commit_operation
         assert(!ok, 'il muro è stato abbassato sotto la porta')
         approx(height_m(@e[:wall]), 3.0, 0.001, 'altezza invariata')
+      end
+    end
+
+    def run_level_change
+      check('Cambio livello sposta solaio, muro, finestra, pilastro e trave') do
+        b = BIMSketch::Builder
+        BIMSketch::Levels.set_current(model, 'L0')
+        l0 = BIMSketch::Levels.find(model, 'L0')
+        model.start_operation('Autotest cambio livello', true)
+        s = b.slab(model, [pt(40, 0, 0), pt(44, 0, 0), pt(44, 3, 0), pt(40, 3, 0)], 0.25.m, 0)
+        w = b.wall(model, pt(40, 10, 0), pt(44, 10, 0), 0.3.m, 3.m, 'center')
+        win = b.opening(model, w, 'window', 2.m, 1.2.m, 1.4.m, 0.9.m)
+        c = b.column(model, pt(46, 0, 0), 0.3.m, 0.3.m, l0['height'].m)
+        bm = b.beam(model, pt(46, 0, 0), pt(46, 4, 0), 0.3.m, 0.5.m, (l0['elevation'] + l0['height']).m)
+        model.commit_operation
+        l1 = BIMSketch::Levels.find(model, 'L1')
+        model.start_operation('Autotest relocate', true)
+        skipped = BIMSketch::Levels.relocate(model, [s, w, c, bm], 'L1')
+        model.commit_operation
+        assert(skipped.zero?, "#{skipped} altezze non adattate")
+        assert([s, w, win, c, bm].all? { |e| BIMSketch::BimData.level_id(e) == 'L1' }, 'livello non assegnato')
+        [approx(s.bounds.max.z.to_m, l1['elevation'], 0.001, 'estradosso solaio'),
+         approx(w.bounds.min.z.to_m, l1['elevation'], 0.001, 'base muro'),
+         approx(height_m(w), l1['height'], 0.001, 'altezza muro'),
+         approx(win.bounds.min.z.to_m, l1['elevation'] + 0.9, 0.001, 'davanzale finestra'),
+         approx(c.bounds.min.z.to_m, l1['elevation'], 0.001, 'base pilastro'),
+         approx(height_m(c), l1['height'], 0.001, 'altezza pilastro'),
+         approx(bm.bounds.max.z.to_m, l1['elevation'] + l1['height'], 0.001, 'estradosso trave')].join(', ')
+      end
+    end
+
+    def parts_of(entity)
+      entity.definition.entities.select { |e| e.is_a?(Sketchup::Group) && e.get_attribute('BIMSketch', 'part') }
+    end
+
+    def run_opening_types
+      puts "\n[Tipologie porte e finestre]"
+      b = BIMSketch::Builder
+      { 'door' => 140, 'window' => 150 }.each do |kind, y|
+        BIMSketch::OpeningTypes.all(kind).each_with_index do |t, i|
+          check("#{t['name']} (#{t['id']})") do
+            model.start_operation('Autotest tipologia apertura', true)
+            @e[:"host_#{kind}"] ||= b.wall(model, pt(0, y, 0), pt(8, y, 0), 0.3.m, 3.m, 'center')
+            o = b.opening(model, @e[:"host_#{kind}"], kind, [1.0, 2.6, 4.2, 6.0][i].m, t['width'].m,
+                          t['height'].m, t['sill'].m, type_id: t['id'])
+            model.commit_operation
+            assert(o, 'apertura non creata')
+            parts = parts_of(o)
+            assert(parts.all? { |p| p.volume > 0 }, 'una parte non è un solido')
+            frame = parts.find { |p| p.name == 'Telaio' }
+            assert(frame && frame.material && frame.material.alpha > 0.99, 'telaio mancante o trasparente')
+            glass = parts.count { |p| p.name == 'Vetro' }
+            glazed = kind == 'window' || t['style'] == 'glazed'
+            assert(glazed ? glass >= 1 : glass.zero?, "vetri: #{glass}")
+            assert(BIMSketch::BimData.read(o)['object_type'] == t['name'], 'tipologia non scritta')
+            [approx((o.bounds.max.x - o.bounds.min.x).to_m, t['width'], 0.002, 'larghezza'),
+             approx(o.bounds.min.z.to_m, t['sill'], 0.002, 'quota'),
+             "#{parts.size} parti, #{glass} vetri"].join(', ')
+          end
+        end
+      end
+      check('Cambio tipologia: finestra a due ante → un\'anta → due ante') do
+        b = BIMSketch::Builder
+        wall = @e[:host_window]
+        win = model.entities.find do |e|
+          BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == 'W2' &&
+            e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+        end
+        guid = BIMSketch::BimData.guid(win)
+        vol = volume_m3(wall)
+        model.start_operation('Autotest cambio tipologia apertura', true)
+        ok = b.change_opening_type(model, win, 'W1')
+        model.commit_operation
+        assert(ok, 'tipologia non cambiata')
+        assert(BIMSketch::BimData.guid(win) == guid, 'GlobalId cambiato')
+        assert(BIMSketch::BimData.read(win)['object_type'] == "Finestra a un'anta", 'ObjectType non aggiornato')
+        res = [approx((win.bounds.max.x - win.bounds.min.x).to_m, 0.8, 0.002, 'larghezza'),
+               approx(volume_m3(wall), vol + 0.4 * 1.4 * 0.3, 0.002, 'volume muro (foro più stretto)')]
+        model.start_operation('Autotest ripristino tipologia apertura', true)
+        ok = b.change_opening_type(model, win, 'W2')
+        model.commit_operation
+        assert(ok, 'ritorno a due ante non riuscito')
+        res << approx(volume_m3(wall), vol, 0.002, 'volume muro ripristinato')
+        res.join(', ')
+      end
+      check('Cambio tipologia che non entra nel muro rifiutato') do
+        b = BIMSketch::Builder
+        model.start_operation('Autotest muro corto', true)
+        short = b.wall(model, pt(0, 160, 0), pt(1.2, 160, 0), 0.3.m, 3.m, 'center')
+        door = b.opening(model, short, 'door', 0.6.m, 0.9.m, 2.1.m, 0, type_id: 'D1')
+        model.commit_operation
+        model.start_operation('Autotest cambio tipologia rifiutato', true)
+        ok = b.change_opening_type(model, door, 'D2') # 1,40 m in un muro lungo 1,20 m
+        model.commit_operation
+        assert(!ok, 'cambio accettato anche se la porta non entra')
+        approx((door.bounds.max.x - door.bounds.min.x).to_m, 0.9, 0.002, 'larghezza invariata')
+      end
+      check('Sposta finestra lungo il muro e cambia davanzale') do
+        b = BIMSketch::Builder
+        wall = @e[:host_window]
+        win = model.entities.find do |e|
+          BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == 'W4' &&
+            e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+        end
+        guid = BIMSketch::BimData.guid(win)
+        vol = volume_m3(wall)
+        n = b.wall_openings(wall).size
+        model.start_operation('Autotest sposta finestra', true)
+        out = b.move_opening(model, win, left: 7.0.m) # 7,00 + 1,00 > 8,00 - 0,01: fuori dal muro
+        moved = b.move_opening(model, win, left: 6.8.m)
+        raised = b.move_opening(model, win, sill: 1.2.m)
+        model.commit_operation
+        assert(!out, 'posizione fuori dal muro accettata')
+        assert(moved && raised, 'spostamento non riuscito')
+        assert(BIMSketch::BimData.guid(win) == guid, 'GlobalId cambiato')
+        assert(b.wall_openings(wall).size == n, "aperture nel muro: #{b.wall_openings(wall).size} invece di #{n}")
+        pos = b.opening_position(model, win)
+        [approx(pos[:left].to_m, 6.8, 0.001, 'distanza dall\'inizio'),
+         approx(win.bounds.min.x.to_m, 6.8, 0.002, 'posizione'),
+         approx(win.bounds.min.z.to_m, 1.2, 0.002, 'davanzale'),
+         approx(volume_m3(wall), vol, 0.002, 'volume muro invariato')].join(', ')
+      end
+      check('Spostamento sopra un\'altra apertura rifiutato') do
+        b = BIMSketch::Builder
+        wall = @e[:host_window]
+        vasistas = model.entities.find do |e|
+          BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == 'W3' &&
+            e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+        end
+        model.start_operation('Autotest sposta sovrapposto', true)
+        ok = b.move_opening(model, vasistas, left: 2.5.m, sill: 0.9.m) # sopra la finestra a due ante
+        model.commit_operation
+        assert(!ok, 'sovrapposizione accettata')
+        approx(vasistas.bounds.min.x.to_m, 3.8, 0.002, 'posizione invariata')
+      end
+      check('Tipo di apertura nell\'IFC') do
+        records = BIMSketch::Collector.collect(model, mesh: true)
+        levels = BIMSketch::Levels.all(model)
+        w = BIMSketch::IfcWriter.new(project_name: 'Autotest')
+        levels.each { |l| w.add_storey(id: l['id'], name: l['name'], elevation: l['elevation']) }
+        records.each { |r| w.add_element(BIMSketch::Records.to_ifc_element(r, levels)) }
+        text = w.to_s
+        %w[.DOUBLE_DOOR_SINGLE_SWING. .SLIDING_TO_LEFT. .DOUBLE_PANEL_VERTICAL.].each do |op|
+          assert(text.include?(op), "#{op} mancante")
+        end
+        'OperationType e PartitioningType presenti'
+      end
+    end
+
+    def find_opening(wall, type_id)
+      model.entities.find do |e|
+        BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == type_id &&
+          e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+      end
+    end
+
+    # Simula uno spostamento fatto con lo Sposta di SketchUp e la correzione
+    # automatica che BIMSketch fa al termine dell'operazione.
+    def sketchup_move(entity, vector, copy: false)
+      model.start_operation('Autotest Sposta di SketchUp', true)
+      target = copy ? duplicate(entity) : entity
+      target.transform!(Geom::Transformation.translation(vector))
+      model.commit_operation
+      model.start_operation('Autotest correzione aperture', true)
+      messages = BIMSketch::OpeningSync.process(model)
+      model.commit_operation
+      [target, messages]
+    end
+
+    # Copia come quella fatta con Ctrl nell'interfaccia, che mantiene i dati
+    # BIM (Group#copy di Ruby non copia gli attributi del gruppo).
+    def duplicate(entity)
+      c = entity.copy
+      c.material = entity.material
+      (entity.attribute_dictionaries || []).each do |d|
+        d.each_pair { |k, v| c.set_attribute(d.name, k, v) }
+      end
+      c
+    end
+
+    def run_sketchup_move
+      puts "\n[Sposta di SketchUp]"
+      b = BIMSketch::Builder
+      wall = @e[:host_window]
+      check('Finestra spostata lungo il muro: il foro segue') do
+        w1 = find_opening(wall, 'W1')
+        vol = volume_m3(wall)
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(0.5.m, 0, 0))
+        assert(msgs.empty?, msgs.join(' '))
+        assert(BIMSketch::OpeningSync.candidates(model).empty?, 'aperture non allineate')
+        [approx(b.opening_position(model, w1)[:left].to_m, 1.1, 0.001, 'distanza dall\'inizio'),
+         approx(volume_m3(wall), vol, 0.002, 'volume muro invariato')].join(', ')
+      end
+      check('Finestra spostata in alto: cambia il davanzale') do
+        w1 = find_opening(wall, 'W1')
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(0, 0, 0.2.m))
+        assert(msgs.empty?, msgs.join(' '))
+        approx(b.opening_position(model, w1)[:sill].to_m, 1.1, 0.001, 'davanzale')
+      end
+      check('Spostamento sopra un\'altra finestra: torna al suo posto') do
+        w1 = find_opening(wall, 'W1')
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(1.0.m, 0, 0))
+        assert(msgs.size == 1, "messaggi: #{msgs.inspect}")
+        assert(BIMSketch::OpeningSync.candidates(model).empty?, 'apertura non riportata al suo posto')
+        approx(b.opening_position(model, w1)[:left].to_m, 1.1, 0.001, 'distanza invariata')
+      end
+      check('Finestra portata lontano dal muro: torna al suo posto') do
+        w1 = find_opening(wall, 'W1')
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(0, 3.m, 0))
+        assert(msgs.size == 1, "messaggi: #{msgs.inspect}")
+        approx(w1.bounds.center.y.to_m, 150.0, 0.01, 'di nuovo nel muro')
+      end
+      check('Copia con Ctrl: diventa una nuova finestra') do
+        w1 = find_opening(wall, 'W1')
+        n = b.wall_openings(wall).size
+        vol = volume_m3(wall)
+        copy, msgs = sketchup_move(w1, Geom::Vector3d.new(4.4.m, 0, 0), copy: true)
+        assert(msgs.empty?, msgs.join(' '))
+        assert(copy.valid?, 'copia eliminata')
+        assert(BIMSketch::BimData.guid(copy) != BIMSketch::BimData.guid(w1), 'GlobalId duplicato')
+        assert(b.wall_openings(wall).size == n + 1, 'foro della copia mancante')
+        [approx(b.opening_position(model, copy)[:left].to_m, 5.5, 0.001, 'posizione copia'),
+         approx(volume_m3(wall), vol - 0.8 * 1.4 * 0.3, 0.002, 'volume muro')].join(', ')
+      end
+      check('Copia sopra un\'altra finestra: eliminata') do
+        w1 = find_opening(wall, 'W1')
+        n = b.wall_openings(wall).size
+        copy, msgs = sketchup_move(w1, Geom::Vector3d.new(1.2.m, 0, 0), copy: true)
+        assert(msgs.size == 1 && !copy.valid?, "copia non eliminata (#{msgs.inspect})")
+        assert(b.wall_openings(wall).size == n, 'fori cambiati')
+        'ok'
+      end
+      check('Muro spostato da solo: le finestre lo seguono') do
+        _, msgs = sketchup_move(wall, Geom::Vector3d.new(0, 0.5.m, 0))
+        assert(msgs.empty?, msgs.join(' '))
+        assert(BIMSketch::OpeningSync.candidates(model).empty?, 'aperture rimaste indietro')
+        approx(find_opening(wall, 'W2').bounds.center.y.to_m, 150.5, 0.01, 'finestra a due ante')
       end
     end
 
@@ -680,7 +920,7 @@ module BIMSketchAutotest
     def run_ui
       puts "\n[Interfaccia]"
       check('Strumenti attivabili') do
-        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new,
+        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new, BIMSketch::Tools::MoveOpeningTool.new,
                  BIMSketch::Tools::ColumnTool.new, BIMSketch::Tools::BeamTool.new,
                  BIMSketch::Tools::OpeningTool.new('door'), BIMSketch::Tools::OpeningTool.new('window')]
         tools.each { |t| model.select_tool(t) }

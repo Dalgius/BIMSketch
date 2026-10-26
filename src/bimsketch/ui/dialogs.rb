@@ -146,6 +146,10 @@ module BIMSketch
           data['dims'] = elements.any? { |e| Builder.element_height(model, e) }
           data['wall_types'] = wall_types_payload if elements.any? { |e| Builder.parametric_wall?(e) }
           data['slab_types'] = wall_types_payload('slab') if elements.any? { |e| Builder.parametric_slab?(e) }
+          kinds = elements.map { |e| BimData.type_key(e) }.uniq
+          if kinds.size == 1 && %w[door window].include?(kinds.first)
+            data['opening_types'] = opening_types_payload(kinds.first)
+          end
           data['summary'] = elements.group_by { |e| BimData.type(e) }.map do |t, es|
             { 'label' => t ? t.plural : '?', 'count' => es.size }
           end
@@ -222,6 +226,15 @@ module BIMSketch
             'thickness' => (g[:thickness] * sz).to_m * 100
           }
         end
+        if %w[door window].include?(BimData.type_key(entity)) && Builder.host_wall(model, entity)
+          data['opening'] = { 'type_id' => entity.get_attribute(BimData::DICT, 'opening_type').to_s,
+                              'types' => opening_types_payload(BimData.type_key(entity)) }
+          pos = Builder.opening_position(model, entity)
+          if pos
+            data['opening']['left'] = pos[:left].to_m.round(4)
+            data['opening']['sill'] = pos[:sill].to_m.round(4) if BimData.type_key(entity) == 'window'
+          end
+        end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
       end
@@ -252,6 +265,43 @@ module BIMSketch
         return true if (target - info[:height]).abs < 0.5.mm && !(auto == false && info[:auto])
 
         Builder.set_height(model, entity, height: target, auto: false)
+      end
+
+      def opening_types_payload(kind)
+        OpeningTypes.all(kind).map do |t|
+          dims = format('%d x %d cm', (t['width'] * 100).round, (t['height'] * 100).round)
+          dims += format(', davanzale %d cm', (t['sill'] * 100).round) if t['sill'].positive?
+          { 'id' => t['id'], 'name' => "#{t['name']} (#{dims})" }
+        end
+      end
+
+      # Posizione di porta o finestra nel muro (campi 'opening_left' e
+      # 'opening_sill' in m, inviati solo se modificati).
+      def apply_opening_position(entity, el)
+        return true unless %w[door window].include?(BimData.type_key(entity))
+
+        left = parse_m(el['opening_left'])
+        sill = parse_m(el['opening_sill'])
+        return true unless left || sill
+
+        Builder.move_opening(model, entity, left: left, sill: sill)
+      end
+
+      def parse_m(value)
+        return nil if value.nil? || value.to_s.strip.empty?
+
+        Float(value.to_s.strip.tr(',', '.')).m
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      # Tipologia di porta o finestra (campo 'opening_type_id').
+      def apply_opening_type(entity, el)
+        id = el['opening_type_id'].to_s
+        return true unless %w[door window].include?(BimData.type_key(entity))
+        return true if id.empty? || id == '(invariato)' || id == entity.get_attribute(BimData::DICT, 'opening_type')
+
+        Builder.change_opening_type(model, entity, id)
       end
 
       def wall_types_payload(kind = 'wall')
@@ -297,6 +347,16 @@ module BIMSketch
         ok
       end
 
+      # Livello scelto nel pannello: gli elementi che cambiano livello si
+      # spostano alla quota del nuovo livello (vedi Levels.relocate).
+      # Restituisce il numero di elementi la cui altezza non è stata adattata.
+      def change_level(elements, id)
+        return 0 if id.to_s.empty?
+
+        moving = elements.reject { |e| BimData.level_id(e) == id }
+        moving.empty? ? 0 : Levels.relocate(model, moving, id)
+      end
+
       def save(data)
         elements = model.selection.select { |e| BimData.element?(e) }
         return if elements.empty?
@@ -304,15 +364,21 @@ module BIMSketch
         failed = 0
         model.start_operation('BIMSketch: Proprietà', true)
         if data['mode'] == 'single'
-          BimData.write(elements.first, data['element'] || {})
+          el = data['element'] || {}
+          BimData.write(elements.first, el.reject { |k, _| k == 'level' })
+          # "(automatico)": il livello verrà dedotto dalla quota.
+          elements.first.set_attribute(BimData::DICT, 'level', '') if el.key?('level') && el['level'].to_s.empty?
+          failed += change_level(elements, el['level'])
           failed += 1 unless apply_height(elements.first, data['element'] || {})
           failed += 1 unless apply_wall_type(elements.first, data['element'] || {})
           failed += 1 unless apply_slab_type(elements.first, data['element'] || {})
+          failed += 1 unless apply_opening_type(elements.first, data['element'] || {})
+          failed += 1 unless apply_opening_position(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
             patch = {}
-            %w[type level material object_type predefined].each do |k|
+            %w[type material object_type predefined].each do |k|
               patch[k] = changes[k] unless changes[k].to_s.empty?
             end
             props = (changes['props'] || {}).reject { |_, v| v.to_s.empty? }
@@ -321,14 +387,16 @@ module BIMSketch
             failed += 1 unless apply_height(e, changes)
             failed += 1 unless apply_wall_type(e, changes)
             failed += 1 unless apply_slab_type(e, changes)
+            failed += 1 unless apply_opening_type(e, changes)
           end
+          failed += change_level(elements, changes['level'])
         end
         model.commit_operation
         refresh
         push('saved', true)
         if failed.positive?
           ::UI.messagebox("#{failed} modifiche di altezza o tipologia non applicate: gli elementi sono stati " \
-                          'modificati a mano oppure le loro aperture non entrerebbero.')
+                          'modificati a mano oppure le aperture non entrerebbero nel muro.')
         end
       rescue StandardError
         model.abort_operation

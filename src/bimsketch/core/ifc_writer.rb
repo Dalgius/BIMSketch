@@ -19,6 +19,7 @@ module BIMSketch
   #   psets: [{ name:, props: [{ name:, type:, value: }] }]
   #   qtos:  [{ name:, quantities: [{ name:, kind:, value: }] }]
   #   overall_width:, overall_height:  (solo porte/finestre)
+  #   operation: OperationType delle porte / PartitioningType delle finestre
   class IfcWriter
     include Step
 
@@ -263,7 +264,8 @@ module BIMSketch
       when 'IFCDOOR', 'IFCWINDOW'
         h = el[:overall_height] ? real(el[:overall_height]) : UNSET
         w = el[:overall_width] ? real(el[:overall_width]) : UNSET
-        add(cls, *common, str(el[:tag]), h, w, enum(predefined), UNSET, UNSET)
+        op = el[:operation].to_s =~ /\A[A-Z_]+\z/ ? enum(el[:operation]) : UNSET
+        add(cls, *common, str(el[:tag]), h, w, enum(predefined), op, UNSET)
       when 'IFCSPACE'
         add(cls, *common, str(el[:long_name]), enum('ELEMENT'), enum(predefined), UNSET)
       else

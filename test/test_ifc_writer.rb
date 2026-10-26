@@ -31,7 +31,7 @@ class IfcWriterTest < Minitest::Test
     door = Fixtures.wall_record.merge(type: 'door', name: 'Porta', predefined: 'DOOR',
                                       measures: Fixtures.box_measures(0.9, 0.05, 2.1),
                                       mesh: Fixtures.box_mesh([1, 0.1, 0], 0.9, 0.05, 2.1),
-                                      host: wall[:guid], material: 'Legno')
+                                      host: wall[:guid], material: 'Legno', operation: 'SINGLE_SWING_LEFT')
     slab = Fixtures.wall_record.merge(type: 'slab', name: 'Solaio', level: 'L1',
                                       predefined: 'FLOOR', z_min: 2.75,
                                       measures: Fixtures.box_measures(5, 4, 0.25),
@@ -139,6 +139,7 @@ class IfcWriterTest < Minitest::Test
     assert_includes text, "'Pset_WallCommon'"
     assert_includes text, 'IFCBOOLEAN(.T.)'
     assert_includes text, "IFCLABEL('REI 120')"
+    assert_match(/=IFCDOOR\(.*\.DOOR\.,\.SINGLE_SWING_LEFT\.,\$\);/, text)
     assert_includes text, '(45,27,51,120000)'
     # Il solaio è sul livello L1 (quota 3.0): z relativa = 2.75 - 3.0
     assert_includes text, '(0.,0.,-0.25)'

@@ -82,6 +82,7 @@ module BIMSketch
       if %w[door window].include?(type.key)
         el[:overall_width] = Quantities.value(qty, 'Width')
         el[:overall_height] = Quantities.value(qty, 'Height')
+        el[:operation] = rec[:operation] unless rec[:operation].to_s.empty?
       end
       el
     end

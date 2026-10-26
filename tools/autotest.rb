@@ -528,6 +528,7 @@ module BIMSketchAutotest
     # BIM (Group#copy di Ruby non copia gli attributi del gruppo).
     def duplicate(entity)
       c = entity.copy
+      c.material = entity.material
       (entity.attribute_dictionaries || []).each do |d|
         d.each_pair { |k, v| c.set_attribute(d.name, k, v) }
       end

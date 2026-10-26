@@ -100,6 +100,7 @@ module BIMSketchAutotest
       run_other_elements
       run_classification
       run_wall_types
+      run_slab_types
       run_tee_joints
       run_data_and_export
       run_ui
@@ -457,6 +458,95 @@ module BIMSketchAutotest
         eps = takeoff.find { |r| r['material'] == 'EPS con grafite' }
         assert(eps, 'materiale isolante assente dal computo')
         "#{text.scan('=IFCMATERIALLAYERSET(').size} stratigrafie IFC, isolante #{format('%.3f', eps['volume'])} m³"
+      end
+    end
+
+
+    def run_slab_types
+      puts "\n[Solai a strati]"
+      lib = BIMSketch::WallTypeLibrary
+      b = BIMSketch::Builder
+      check('Libreria tipologie solaio') do
+        types = lib.all(model, kind: 'slab')
+        assert(types.size == 3 && lib.find(model, 'ST1', kind: 'slab'), "tipologie: #{types.map { |t| t['id'] }}")
+        "#{types.size} tipologie, ST1 = #{BIMSketch::WallTypes.summary(lib.find(model, 'ST1', kind: 'slab'))}"
+      end
+      check('Solaio 5 x 4 con stratigrafia (ST1, 34 cm)') do
+        model.start_operation('Autotest solaio a strati', true)
+        s = b.slab(model, [pt(0, 120, 0), pt(5, 120, 0), pt(5, 124, 0), pt(0, 124, 0)], 0.25.m, 6.m,
+                   type_id: 'ST1')
+        model.commit_operation
+        @e[:layered_slab] = s
+        layers = layers_of(s)
+        assert(layers.size == 5, "strati creati: #{layers.size}")
+        assert(layers.all? { |l| l.volume > 0 }, 'uno strato non è un solido')
+        t = lib.find(model, 'ST1', kind: 'slab')
+        u = BIMSketch::WallTypes.u_value(t, external: false, flow: :down)
+        props = BIMSketch::BimData.json_attr(s, 'props')
+        assert((props['ThermalTransmittance'].to_f - u).abs < 1e-3, "U nel Pset: #{props['ThermalTransmittance']}")
+        assert(BIMSketch::BimData.read(s)['object_type'] == t['name'], 'tipologia non scritta come ObjectType')
+        top = layers.max_by { |l| l.bounds.max.z }
+        assert(top.name == 'Pavimento', "strato superiore: #{top.name}")
+        [approx(volume_m3(s), 5 * 4 * 0.34, 0.002, 'volume'),
+         approx(s.bounds.max.z.to_m, 6.0, 0.001, 'estradosso'),
+         approx(s.bounds.min.z.to_m, 5.66, 0.001, 'intradosso'),
+         approx(qty(s, 'GrossArea'), 20.0, 0.01, 'superficie (senza facce interne)'),
+         format('U %.3f W/m²K', u)].join(', ')
+      end
+      check('Tipologia assegnata a un solaio esistente (estradosso fermo)') do
+        s = @e[:slab]
+        top = s.bounds.max.z.to_m
+        model.start_operation('Autotest assegna tipologia solaio', true)
+        ok = b.apply_slab_type(model, s, 'ST2')
+        model.commit_operation
+        assert(ok, 'tipologia non applicata')
+        assert(layers_of(s).size == 4, "strati: #{layers_of(s).size}")
+        [approx(s.bounds.max.z.to_m, top, 0.001, 'estradosso'),
+         approx(volume_m3(s), 5 * 4 * 0.315, 0.002, 'volume')].join(', ')
+      end
+      check('Solaio da faccia con stratigrafia') do
+        model.start_operation('Autotest solaio da faccia', true)
+        face = model.entities.add_face(pt(10, 120, 9), pt(14, 120, 9), pt(14, 123, 9), pt(10, 123, 9))
+        s = BIMSketch::Commands.element_from_face(face, 'slab', :down, 0.2.m)
+        model.entities.erase_entities([face] + face.edges)
+        assert(b.parametric_slab?(s), 'solaio da faccia non riconosciuto')
+        ok = b.apply_slab_type(model, s, 'ST1')
+        model.commit_operation
+        @e[:face_slab] = s
+        assert(ok, 'tipologia non applicata')
+        [approx(s.bounds.max.z.to_m, 9.0, 0.001, 'estradosso'),
+         approx(volume_m3(s), 4 * 3 * 0.34, 0.002, 'volume')].join(', ')
+      end
+      check('Modifica della tipologia aggiorna i solai') do
+        types = lib.all(model, kind: 'slab')
+        types.find { |t| t['id'] == 'ST1' }['layers'][1]['thickness'] = 0.08
+        model.start_operation('Autotest modifica tipologia solaio', true)
+        lib.save(model, types, kind: 'slab')
+        failed = b.update_type_slabs(model, 'ST1')
+        model.commit_operation
+        assert(failed.zero?, "#{failed} solai non aggiornati")
+        [approx(volume_m3(@e[:layered_slab]), 5 * 4 * 0.36, 0.002, 'volume solaio'),
+         approx(volume_m3(@e[:face_slab]), 4 * 3 * 0.36, 0.002, 'volume solaio da faccia'),
+         approx(@e[:layered_slab].bounds.max.z.to_m, 6.0, 0.001, 'estradosso')].join(', ')
+      end
+      check('Rimozione della tipologia (solaio unico)') do
+        s = @e[:face_slab]
+        model.start_operation('Autotest rimuovi tipologia solaio', true)
+        ok = b.apply_slab_type(model, s, nil)
+        model.commit_operation
+        assert(ok && layers_of(s).empty?, 'strati ancora presenti')
+        assert(s.volume > 0, 'il solaio non è un solido')
+        approx(volume_m3(s), 4 * 3 * 0.36, 0.002, 'volume (spessore mantenuto)')
+      end
+      check('Stratigrafia dei solai nell\'IFC e nel computo') do
+        records = BIMSketch::Collector.collect(model, mesh: true)
+        rec = records.find { |r| r[:entity] == @e[:layered_slab] }
+        assert(rec[:layers] && rec[:layers].size == 5, 'strati non raccolti')
+        assert(rec[:mesh_parts] && rec[:mesh_parts].size == 5, 'geometria per strato mancante')
+        takeoff = BIMSketch::Records.material_takeoff(records)
+        xps = takeoff.find { |r| r['material'] == 'XPS' }
+        assert(xps, 'isolante del solaio assente dal computo')
+        approx(xps['volume'], 5 * 4 * 0.10, 0.002, 'volume XPS (ST2)')
       end
     end
 

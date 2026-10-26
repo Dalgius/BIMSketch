@@ -117,9 +117,9 @@ module BIMSketch
         alpha: alpha,
         solid: volume > 0,
         z_min: world_bounds_min_z(defn, world),
-        measures: measures(defn, world, volume)
+        measures: measures(defn, world, volume, data['type'] == 'wall' ? 'y' : 'z')
       }
-      add_layers(model, entity, rec) if rec[:type] == 'wall'
+      add_layers(model, entity, rec) unless proxy
       if with_mesh
         rec[:mesh] = mesh(defn, world)
         parts = layer_children(defn)
@@ -134,11 +134,13 @@ module BIMSketch
       rec
     end
 
-    # Stratigrafia del muro (dalla sua tipologia) per abaco e IFC.
+    # Stratigrafia di muri e solai (dalla loro tipologia) per abaco e IFC.
     def add_layers(model, entity, rec)
-      return unless Builder.parametric_wall?(entity)
-
-      type = Builder.wall_type(model, entity)
+      type = if rec[:type] == 'wall'
+               Builder.parametric_wall?(entity) ? Builder.wall_type(model, entity) : nil
+             else
+               Builder.slab_type(model, entity)
+             end
       return unless type
 
       rec[:layer_set_name] = type['name']
@@ -147,7 +149,7 @@ module BIMSketch
       end
     end
 
-    # Sotto-gruppi che rappresentano gli strati di un muro.
+    # Sotto-gruppi che rappresentano gli strati di un muro o di un solaio.
     def layer_children(defn)
       defn.entities.select do |e|
         BimData.instance?(e) && !e.get_attribute(BimData::DICT, 'layer').nil?
@@ -161,7 +163,9 @@ module BIMSketch
     end
 
     # Misure di base nel sistema locale dell'elemento (in metri).
-    def measures(defn, world, volume)
+    # layer_axis: asse lungo cui si susseguono gli strati ('y' nei muri,
+    # 'z' nei solai), per escludere le facce di contatto tra gli strati.
+    def measures(defn, world, volume, layer_axis = 'y')
       sx, sy, sz = Geometry.scales(world)
       bb = defn.bounds
       areas = Hash.new(0.0)
@@ -172,8 +176,8 @@ module BIMSketch
         n = face.normal.transform(local)
         n.normalize! if n.length > 0
         bucket = axis_bucket(n)
-        # Muri a strati: le facce di contatto tra gli strati non sono superfici del muro.
-        next if layered && %w[py ny].include?(bucket) && !outer_face?(face, local, bb, bucket)
+        # Elementi a strati: le facce di contatto tra gli strati non sono superfici dell'elemento.
+        next if layered && bucket[1] == layer_axis && !outer_face?(face, local, bb, bucket)
 
         areas[bucket] += area
         if bucket == 'pz' && area > perimeter[0]
@@ -192,9 +196,12 @@ module BIMSketch
     end
 
     def outer_face?(face, local, bb, bucket)
-      y = face.vertices.first.position.transform(local).y
-      target = bucket == 'py' ? bb.max.y : bb.min.y
-      (y - target).abs < 1.mm
+      p = face.vertices.first.position.transform(local)
+      if bucket[1] == 'z'
+        (p.z - (bucket == 'pz' ? bb.max.z : bb.min.z)).abs < 1.mm
+      else
+        (p.y - (bucket == 'py' ? bb.max.y : bb.min.y)).abs < 1.mm
+      end
     end
 
     def edge_scale(edge, tr)

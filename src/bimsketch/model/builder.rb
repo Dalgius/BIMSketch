@@ -407,27 +407,135 @@ module BIMSketch
       wall.set_attribute(BimData::DICT, 'object_type', type['name'])
     end
 
-    # Solaio da un poligono (punti mondo); la faccia superiore sta alla quota top_z.
-    def slab(model, points, thickness, top_z, holes: [], type_key: 'slab')
-      prism_element(model, points, holes, top_z - thickness, thickness, type_key)
-    end
+    # Tipi di elemento a cui si può assegnare una tipologia di solaio.
+    SLAB_TYPES = %w[slab roof].freeze
 
-    # Elemento prismatico generico: poligono proiettato a base_z, estruso di height.
-    def prism_element(model, points, holes, base_z, height, type_key)
-      pts = points.map { |p| Geom::Point3d.new(p.x, p.y, base_z) }
-      return nil if pts.size < 3
+    # Solaio da un poligono (punti mondo); la faccia superiore sta alla quota
+    # top_z. type_id: tipologia di solaio con stratigrafia (lo spessore
+    # diventa quello della tipologia).
+    def slab(model, points, thickness, top_z, holes: [], type_key: 'slab', type_id: nil)
+      type = WallTypeLibrary.find(model, type_id, kind: 'slab')
+      thickness = WallTypes.thickness(type).m if type
+      return nil if points.size < 3
 
-      min_x = pts.map(&:x).min
-      min_y = pts.map(&:y).min
-      origin = Geom::Point3d.new(min_x, min_y, base_z)
-      tr = Geom::Transformation.translation(origin)
-      inv = tr.inverse
-      local = pts.map { |p| p.transform(inv) }
-      local_holes = holes.map { |h| h.map { |p| Geom::Point3d.new(p.x, p.y, base_z).transform(inv) } }
+      base_z = top_z - thickness
+      min_x = points.map(&:x).min
+      min_y = points.map(&:y).min
+      flat = ->(poly) { poly.map { |p| [(p.x - min_x).to_f, (p.y - min_y).to_f] } }
+      outline = flat.call(points)
+      local_holes = holes.map { |h| flat.call(h) }
+      tr = Geom::Transformation.translation(Geom::Point3d.new(min_x, min_y, base_z))
+      layers = type ? WallTypeLibrary.slab_layers(model, type, thickness) : nil
       group = Geometry.create_group(model, tr) do |ents|
-        Geometry.prism(ents, local, local_holes, height)
+        Geometry.build_slab(ents, outline, local_holes, 0.0, thickness, layers: layers)
       end
       finish(model, group, type_key)
+      store_slab_geom(group, outline: outline, holes: local_holes, base: 0.0, thickness: thickness.to_f,
+                             type_id: type && type['id'])
+      apply_slab_type_data(model, group, type) if type
+      group
+    end
+
+    def store_slab_geom(slab, g)
+      geom = { 'outline' => g[:outline], 'holes' => g[:holes], 'base' => g[:base].to_f,
+               'thickness' => g[:thickness].to_f, 'type_id' => g[:type_id] }
+      slab.set_attribute(BimData::DICT, 'slab_geom', JSON.generate(geom))
+    end
+
+    # Parametri del solaio nel suo sistema locale (unità interne, senza scala):
+    # { outline:, holes:, base:, thickness:, type_id: }. Per i solai senza
+    # 'slab_geom' (versioni precedenti, elementi da faccia) il contorno viene
+    # letto dalla faccia superiore; nil se l'elemento non è un prisma semplice.
+    def slab_geom(slab)
+      raw = slab.get_attribute(BimData::DICT, 'slab_geom')
+      if raw
+        g = JSON.parse(raw)
+        return { outline: g['outline'], holes: g['holes'] || [], base: g['base'].to_f,
+                 thickness: g['thickness'].to_f, type_id: g['type_id'] }
+      end
+      ents = slab.definition.entities
+      bb = slab.definition.bounds
+      top = ents.grep(Sketchup::Face).select do |f|
+        f.normal.z > 0.999 && (f.vertices.first.position.z - bb.max.z).abs < 0.01.mm
+      end.max_by(&:area)
+      return nil unless top
+
+      loop_xy = ->(lp) { lp.vertices.map { |v| [v.position.x.to_f, v.position.y.to_f] } }
+      { outline: loop_xy.call(top.outer_loop), holes: top.loops.reject(&:outer?).map { |l| loop_xy.call(l) },
+        base: bb.min.z.to_f, thickness: (bb.max.z - bb.min.z).to_f, type_id: nil }
+    rescue JSON::ParserError
+      nil
+    end
+
+    # Solaio o copertura di cui si può ricostruire la geometria (prisma).
+    def parametric_slab?(entity)
+      BimData.element?(entity) && SLAB_TYPES.include?(BimData.type_key(entity)) && !slab_geom(entity).nil?
+    end
+
+    # Tipologia di solaio assegnata all'elemento, o nil.
+    def slab_type(model, slab)
+      WallTypeLibrary.find(model, slab_geom_type_id(slab), kind: 'slab')
+    end
+
+    # Il solaio corrisponde ancora al suo contorno per lo spessore?
+    def slab_intact?(slab, g = slab_geom(slab))
+      det = Geometry.scales(slab.transformation).reduce(:*)
+      vol = Geometry.solid_volume(slab)
+      return false unless g && vol > 0 && det > 0
+
+      area = WallJoint.area(g[:outline]) - g[:holes].sum { |h| WallJoint.area(h) }
+      expected = area * g[:thickness]
+      (vol / det - expected).abs <= [expected * 0.001, 1.0].max
+    end
+
+    # Assegna (o toglie, con type_id nil) una tipologia a un solaio: la faccia
+    # superiore resta alla sua quota, lo spessore diventa quello della
+    # stratigrafia e gli strati vengono costruiti. Rifiuta i solai modificati a mano.
+    def apply_slab_type(model, slab, type_id)
+      g = slab_geom(slab)
+      return false unless g && slab_intact?(slab, g)
+
+      type = WallTypeLibrary.find(model, type_id, kind: 'slab')
+      sz = Geometry.scales(slab.transformation)[2]
+      top = g[:base] + g[:thickness]
+      thickness = type ? WallTypes.thickness(type).m / sz : g[:thickness]
+      base = top - thickness
+      slab.make_unique if slab.respond_to?(:make_unique)
+      ents = slab.definition.entities
+      ents.clear!
+      layers = type ? WallTypeLibrary.slab_layers(model, type, thickness) : nil
+      Geometry.build_slab(ents, g[:outline], g[:holes], base, thickness, layers: layers)
+      store_slab_geom(slab, outline: g[:outline], holes: g[:holes], base: base, thickness: thickness,
+                            type_id: type && type['id'])
+      apply_slab_type_data(model, slab, type) if type
+      true
+    end
+
+    # Aggiorna i solai del contesto attivo che usano la tipologia.
+    # Restituisce il numero di solai non adattati.
+    def update_type_slabs(model, type_id, remove: false)
+      slabs = model.active_entities.select { |e| (t = slab_geom_type_id(e)) && t == type_id }
+      slabs.count { |s| !apply_slab_type(model, s, remove ? nil : type_id) }
+    end
+
+    def slab_geom_type_id(entity)
+      return nil unless BimData.element?(entity) && SLAB_TYPES.include?(BimData.type_key(entity))
+
+      raw = entity.get_attribute(BimData::DICT, 'slab_geom')
+      raw && JSON.parse(raw)['type_id']
+    rescue JSON::ParserError
+      nil
+    end
+
+    # Dati derivati dalla tipologia di solaio: ObjectType e trasmittanza U
+    # (flusso verso il basso per i solai, verso l'alto per le coperture).
+    def apply_slab_type_data(_model, slab, type)
+      props = BimData.json_attr(slab, 'props')
+      u = WallTypes.u_value(type, external: props['IsExternal'] == true,
+                                  flow: WallTypes.flow_for(BimData.type_key(slab)))
+      props['ThermalTransmittance'] = u.round(4) if u
+      slab.set_attribute(BimData::DICT, 'props', JSON.generate(props))
+      slab.set_attribute(BimData::DICT, 'object_type', type['name'])
     end
 
     # Pilastro rettangolare centrato in center (base alla quota di center).

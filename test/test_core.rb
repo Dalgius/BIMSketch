@@ -173,6 +173,19 @@ class RecordsTest < Minitest::Test
     assert_includes R.takeoff_csv(rows), '0,4500'
   end
 
+  def test_material_takeoff_slab
+    slab = Fixtures.wall_record.merge(
+      type: 'slab', measures: Fixtures.box_measures(5.0, 4.0, 0.3),
+      layers: [{ name: 'Massetto', material: 'Massetto', thickness: 0.06 },
+               { name: 'Soletta', material: 'Calcestruzzo', thickness: 0.24 }]
+    )
+    rows = R.material_takeoff([slab])
+    massetto = rows.find { |r| r['material'] == 'Massetto' }
+    assert_in_delta 20.0, massetto['area'], 1e-9
+    assert_in_delta 1.2, massetto['volume'], 1e-9
+    assert_in_delta 4.8, rows.find { |r| r['material'] == 'Calcestruzzo' }['volume'], 1e-9
+  end
+
   def test_checker
     a = Fixtures.wall_record
     b = Fixtures.wall_record(guid: a[:guid], level: 'missing')

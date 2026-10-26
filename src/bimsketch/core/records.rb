@@ -136,15 +136,17 @@ module BIMSketch
       rows.map { |r| r[key] }.compact.sum.round(3)
     end
 
-    # Computo dei materiali dagli strati dei muri: superficie netta del muro
-    # (al netto delle aperture) per spessore di ogni strato, sommati per materiale.
+    # Computo dei materiali dagli strati di muri e solai: superficie netta del
+    # muro (al netto delle aperture) o superficie del solaio per lo spessore
+    # di ogni strato, sommati per materiale.
     def material_takeoff(records)
       totals = Hash.new { |h, k| h[k] = { 'area' => 0.0, 'volume' => 0.0, 'elements' => 0 } }
       records.each do |rec|
         layers = Array(rec[:layers])
         next if layers.empty?
 
-        area = Quantities.value(quantities(rec), 'NetSideArea')
+        q = quantities(rec)
+        area = Quantities.value(q, 'NetSideArea') || Quantities.value(q, 'GrossArea')
         next unless area
 
         layers.each do |l|

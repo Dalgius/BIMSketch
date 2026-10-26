@@ -3,30 +3,32 @@
 require 'json'
 
 module BIMSketch
-  # Libreria delle tipologie di muro salvata nel modello SketchUp.
+  # Librerie delle tipologie (stratigrafie) salvate nel modello SketchUp:
+  # kind 'wall' per i muri, 'slab' per solai e coperture.
   module WallTypeLibrary
     DICT = 'BIMSketch_WallTypes'
+    DICTS = { 'wall' => DICT, 'slab' => 'BIMSketch_SlabTypes' }.freeze
     MATERIAL_PREFIX = 'BIM Strato - '
 
     module_function
 
-    def all(model = Sketchup.active_model)
-      raw = model.get_attribute(DICT, 'types')
-      raw ? WallTypes.normalize(JSON.parse(raw)) : WallTypes.default_library
+    def all(model = Sketchup.active_model, kind: 'wall')
+      raw = model.get_attribute(DICTS[kind], 'types')
+      raw ? WallTypes.normalize(JSON.parse(raw), kind) : WallTypes.default_library(kind)
     rescue JSON::ParserError
-      WallTypes.default_library
+      WallTypes.default_library(kind)
     end
 
-    def save(model, types)
-      list = WallTypes.normalize(types)
-      model.set_attribute(DICT, 'types', JSON.generate(list))
+    def save(model, types, kind: 'wall')
+      list = WallTypes.normalize(types, kind)
+      model.set_attribute(DICTS[kind], 'types', JSON.generate(list))
       list
     end
 
-    def find(model, id)
+    def find(model, id, kind: 'wall')
       return nil if id.to_s.empty?
 
-      WallTypes.find(all(model), id)
+      WallTypes.find(all(model, kind: kind), id)
     end
 
     # Materiale SketchUp di uno strato (creato al primo uso, colore per funzione).
@@ -44,6 +46,14 @@ module BIMSketch
     def geometry_layers(model, type, thickness, flipped)
       WallTypes.bands(type, thickness, flipped: flipped).map do |y0, y1, layer, _index|
         [y0, y1, layer['name'], material_for(model, layer)]
+      end
+    end
+
+    # Fasce degli strati per Geometry.build_slab: [[z0, z1, nome, materiale], ...]
+    # dall'intradosso (z = 0), alte in totale thickness (unità interne).
+    def slab_layers(model, type, thickness)
+      WallTypes.slab_bands(type, thickness).map do |z0, z1, layer, _index|
+        [z0, z1, layer['name'], material_for(model, layer)]
       end
     end
   end

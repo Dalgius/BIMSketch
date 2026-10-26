@@ -27,6 +27,15 @@ module BIMSketch
             @local_x = to_wall_local(@ip.position).x
           end
         end
+        # In pianta il taglio della sezione non si seleziona: si cerca il muro
+        # lungo la linea di vista.
+        unless @wall
+          hit = Builder.wall_under_ray(model, view.pickray(x, y))
+          if hit
+            @wall = hit[0]
+            @local_x = to_wall_local(hit[1]).x
+          end
+        end
         super(flags, x, y, view) unless @wall
         update_preview(view)
         update_ui

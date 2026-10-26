@@ -217,6 +217,43 @@ module BIMSketch
       best && best[1]
     end
 
+    # Muro parametrico sotto la linea di vista ray (coordinate mondo), anche
+    # dove il muro non si può selezionare (es. il taglio della sezione in una
+    # vista in pianta): il più vicino all'osservatore fra i muri visibili, non
+    # tagliati via dalla sezione attiva, la cui impronta alla quota della base
+    # contiene il punto in cui la linea la attraversa. [muro, punto] o nil.
+    def wall_under_ray(model, ray)
+      section = model.active_entities.active_section_plane || model.entities.active_section_plane
+      plane = section && section.get_plane
+      best = nil
+      model.active_entities.each do |e|
+        next unless parametric_wall?(e) && !e.hidden? && (e.layer.nil? || e.layer.visible?)
+
+        pr = wall_params(model, e)
+        next unless pr
+
+        base = pr[:p1]
+        next if plane && plane[0] * base.x + plane[1] * base.y + plane[2] * base.z + plane[3] < -1.mm
+
+        pt = Geom.intersect_line_plane(ray, [Geom::Point3d.new(0, 0, base.z), Z_AXIS])
+        next unless pt
+
+        a = [base.x.to_f, base.y.to_f]
+        b = [pr[:p2].x.to_f, pr[:p2].y.to_f]
+        _dist, t, q, len = WallJoint.project([pt.x.to_f, pt.y.to_f], a, b)
+        next unless t > Geometry::TOL && t < len - Geometry::TOL
+
+        d = WallJoint.direction(a, b)
+        offset = (pt.x - q[0]) * -d[1] + (pt.y - q[1]) * d[0]
+        lo, hi = WallJoint.band(pr[:align], pr[:thickness].to_f)
+        next unless offset >= lo - 1.mm && offset <= hi + 1.mm
+
+        dist = ray[0].distance(pt)
+        best = [dist, e, pt] if best.nil? || dist < best[0]
+      end
+      best && best[1..2]
+    end
+
     # Taglia l'estremità "at" del muro sulla faccia del muro ospite il cui asse
     # passa per quell'estremità (giunto a T). Il muro ospite non cambia.
     # Restituisce true se il giunto è stato applicato.

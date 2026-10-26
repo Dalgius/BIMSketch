@@ -1025,6 +1025,14 @@ module BIMSketchAutotest
         "scena \"#{page.name}\" creata, sezione attiva a #{format('%.2f', -n[3] / n[2] * 0.0254)} m " \
           '(verifica a occhio, vedi sotto)'
       end
+      check('In pianta porte e finestre trovano il muro sotto il cursore') do
+        down = Geom::Vector3d.new(0, 0, -1)
+        hit = BIMSketch::Builder.wall_under_ray(model, [pt(2.5, 0.05, 50), down])
+        assert(hit && hit[0] == @e[:wall], "muro trovato: #{hit && BIMSketch::BimData.guid(hit[0])}")
+        miss = BIMSketch::Builder.wall_under_ray(model, [pt(2.5, 2.0, 50), down])
+        assert(miss.nil?, 'muro trovato dove non ce ne sono')
+        approx(hit[1].x.to_m, 2.5, 0.001, 'punto sul muro')
+      end
     end
 
     def report

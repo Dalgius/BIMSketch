@@ -26,7 +26,7 @@ module BIMSketch
         next false unless Builder.stored_rect(e)
 
         wall = Builder.host_wall(model, e)
-        wall && !Builder.opening_in_place?(wall, e)
+        wall && !Builder.opening_in_place?(model, wall, e)
       end
     end
 
@@ -50,25 +50,26 @@ module BIMSketch
       rect = Builder.stored_rect(opening)
       kind = BimData.type_key(opening)
       type = OpeningTypes.for_kind(kind, opening.get_attribute(BimData::DICT, 'opening_type'))
+      position = Builder.depth_position(opening)
       registered = Builder.wall_openings(wall).any? { |r| Builder.same_rect?(r, rect) }
       copy = copy?(model, opening)
       what = kind == 'door' ? 'La porta' : 'La finestra'
 
       # L'apertura non è stata toccata: è cambiato il muro (spostato o ricostruito).
       if !copy && placed_unchanged?(opening)
-        Builder.place_opening(model, opening, wall, kind, rect, type) if registered
+        Builder.place_opening(model, opening, wall, kind, rect, type, position) if registered
         return nil
       end
       return nil unless copy || registered
 
-      target = target_rect(wall, opening, kind, rect, copy)
+      target = target_rect(model, wall, opening, kind, rect, copy)
       unless target && Builder.wall_intact?(wall)
         if copy
           opening.erase!
           return "#{what} copiata non entra in quel punto del muro ed è stata eliminata. " \
                  'Per aggiungere aperture usa gli strumenti Porta e Finestra.'
         end
-        Builder.place_opening(model, opening, wall, kind, rect, type)
+        Builder.place_opening(model, opening, wall, kind, rect, type, position)
         return "#{what} non entra in quella posizione (fuori dal muro o sovrapposta a un'altra apertura): " \
                'è tornata al suo posto.'
       end
@@ -80,18 +81,18 @@ module BIMSketch
       else
         openings = openings.map { |r| Builder.same_rect?(r, rect) ? target : r }
       end
-      Builder.rebuild_wall_openings(model, wall, openings)
-      Builder.place_opening(model, opening, wall, kind, target, type)
+      Builder.rebuild_wall_openings(model, wall, openings, override: [target, position])
+      Builder.place_opening(model, opening, wall, kind, target, type, position)
       nil
     end
 
     # Vano corrispondente alla posizione attuale dell'apertura (stessa
     # larghezza e altezza), o nil se è lontana dal muro o non entra.
-    def target_rect(wall, opening, kind, rect, copy)
+    def target_rect(model, wall, opening, kind, rect, copy)
       sx, sy, sz = Geometry.scales(wall.transformation)
       local = wall.transformation.inverse * opening.transformation
       origin = Geom::Point3d.new(0, 0, 0).transform(local)
-      expected, = Builder.opening_frame(wall, kind, rect)
+      expected, = Builder.opening_frame(model, wall, kind, rect, Builder.depth_position(opening))
       expected_y = Geom::Point3d.new(0, 0, 0).transform(wall.transformation.inverse * expected).y
       return nil if (origin.y - expected_y).abs * sy > FAR.m
 
@@ -120,7 +121,7 @@ module BIMSketch
         next false if e == opening || !BimData.element?(e) || BimData.guid(e) != guid
 
         wall = Builder.host_wall(model, e)
-        wall && Builder.opening_in_place?(wall, e)
+        wall && Builder.opening_in_place?(model, wall, e)
       end
     end
 

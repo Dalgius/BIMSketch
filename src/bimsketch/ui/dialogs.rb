@@ -229,6 +229,8 @@ module BIMSketch
         if %w[door window].include?(BimData.type_key(entity)) && Builder.host_wall(model, entity)
           data['opening'] = { 'type_id' => entity.get_attribute(BimData::DICT, 'opening_type').to_s,
                               'types' => opening_types_payload(BimData.type_key(entity)) }
+          data['opening']['depth'] = Builder.depth_position(entity)
+          data['opening']['depths'] = OpeningTypes::POSITIONS.map { |k, v| { 'id' => k, 'name' => v } }
           pos = Builder.opening_position(model, entity)
           if pos
             data['opening']['left'] = pos[:left].to_m.round(4)
@@ -280,11 +282,16 @@ module BIMSketch
       def apply_opening_position(entity, el)
         return true unless %w[door window].include?(BimData.type_key(entity))
 
+        ok = true
+        depth = el['opening_depth'].to_s
+        if OpeningTypes::POSITIONS.key?(depth) && depth != Builder.depth_position(entity)
+          ok = Builder.set_depth_position(model, entity, depth)
+        end
         left = parse_m(el['opening_left'])
         sill = parse_m(el['opening_sill'])
-        return true unless left || sill
+        return ok unless left || sill
 
-        Builder.move_opening(model, entity, left: left, sill: sill)
+        Builder.move_opening(model, entity, left: left, sill: sill) && ok
       end
 
       def parse_m(value)

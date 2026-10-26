@@ -131,7 +131,8 @@ module BIMSketch
       return false unless frame
 
       sx, _sy, sz = Geometry.scales(wall.transformation)
-      openings = wall_openings(wall).map { |a, b, c, d| [a * sx, b * sx, c * sz, d * sz] }
+      old_openings = wall_openings(wall)
+      openings = old_openings.map { |a, b, c, d| [a * sx, b * sx, c * sz, d * sz] }
       tr, length = frame
       ext = WallJoint.normalize_ext(ext)
       lo_x, hi_x = WallJoint.core_range(length, ext)
@@ -145,12 +146,19 @@ module BIMSketch
       wall.make_unique if wall.respond_to?(:make_unique)
       ents = wall.definition.entities
       ents.clear!
+      hosted = hosted_openings(model, wall, old_openings)
       layers = type ? WallTypeLibrary.geometry_layers(model, type, thickness, flipped) : nil
-      Geometry.build_wall(ents, length, thickness, height, ext, openings, layers: layers)
+      reveals = wall_reveals(model, type, thickness, flipped, openings, hosted.map { |o| o && depth_position(o) },
+                             1.0)
+      Geometry.build_wall(ents, length, thickness, height, ext, openings, layers: layers, reveals: reveals)
       wall.transformation = tr
       store_wall_geom(wall, length: length, thickness: thickness, height: height, align: pr[:align], ext: ext,
                             auto: auto.nil? ? g[:auto] : auto, type_id: type && type['id'], flipped: flipped)
       wall.set_attribute(BimData::DICT, 'openings', JSON.generate(openings)) unless openings.empty?
+      # Le porte e finestre seguono il nuovo spessore e la nuova posizione del muro.
+      hosted.each_with_index do |o, i|
+        replace_opening(model, o, wall, openings[i], depth_position(o)) if o
+      end
       true
     end
 
@@ -688,7 +696,7 @@ module BIMSketch
     end
 
     def same_rect?(r, q)
-      r.zip(q).all? { |u, v| (u - v).abs < 0.5.mm }
+      r.first(4).zip(q.first(4)).all? { |u, v| (u - v).abs < 0.5.mm }
     end
 
     # Inserisce una porta o una finestra in un muro parametrico: taglia il
@@ -700,8 +708,10 @@ module BIMSketch
 
       raise "il muro è stato modificato a mano: non è possibile inserire l'apertura" unless wall_intact?(wall)
 
-      rebuild_wall_openings(model, wall, wall_openings(wall) + [rect])
-      group = place_opening(model, nil, wall, kind, rect, OpeningTypes.for_kind(kind, type_id))
+      type = OpeningTypes.for_kind(kind, type_id)
+      position = OpeningTypes.position(type)
+      rebuild_wall_openings(model, wall, wall_openings(wall) + [rect], override: [rect, position])
+      group = place_opening(model, nil, wall, kind, rect, type, position)
       finish(model, group, kind, { 'host' => BimData.guid(wall) }, level: BimData.level_id(wall))
       external = BimData.json_attr(wall, 'props')['IsExternal']
       unless external.nil?
@@ -712,37 +722,104 @@ module BIMSketch
     end
 
     # Ricostruisce il muro con le aperture indicate (coordinate locali).
-    def rebuild_wall_openings(model, wall, openings)
+    # override: [vano, posizione] per un'apertura non ancora registrata nel
+    # muro o di cui cambia la posizione del serramento.
+    def rebuild_wall_openings(model, wall, openings, override: nil)
       g = wall_geom(wall)
       type = WallTypeLibrary.find(model, g[:type_id])
       layers = type ? WallTypeLibrary.geometry_layers(model, type, g[:thickness], g[:flipped]) : nil
+      hosted = hosted_openings(model, wall, openings)
+      positions = openings.each_with_index.map do |r, i|
+        next override[1] if override && same_rect?(override[0], r)
+
+        hosted[i] && depth_position(hosted[i])
+      end
+      reveals = wall_reveals(model, type, g[:thickness], g[:flipped], openings, positions,
+                             Geometry.scales(wall.transformation)[1])
       wall.make_unique if wall.respond_to?(:make_unique)
       wall.definition.entities.clear!
       Geometry.build_wall(wall.definition.entities, g[:length], g[:thickness], g[:height], g[:ext], openings,
-                          layers: layers)
+                          layers: layers, reveals: reveals)
       store_wall_geom(wall, g)
       wall.set_attribute(BimData::DICT, 'openings', JSON.generate(openings))
     end
 
+    # Porte e finestre ospitate dal muro, allineate ai vani indicati (nil
+    # dove nessuna apertura registra quel vano).
+    def hosted_openings(model, wall, rects)
+      guid = BimData.guid(wall)
+      hosted = model.active_entities.select do |e|
+        BimData.element?(e) && e.get_attribute(BimData::DICT, 'host') == guid && stored_rect(e)
+      end
+      rects.map { |r| hosted.find { |o| same_rect?(stored_rect(o), r) } }
+    end
+
+    # Posizione del serramento nello spessore del muro (vedi OpeningTypes).
+    def depth_position(opening)
+      type = OpeningTypes.for_kind(BimData.type_key(opening), opening.get_attribute(BimData::DICT, 'opening_type'))
+      OpeningTypes.position(type, opening.get_attribute(BimData::DICT, 'depth_position'))
+    end
+
+    # Profondità del telaio (mondo) per uno spessore di muro locale t.
+    def frame_depth(kind, t, sy)
+      [kind == 'door' ? 100.mm : 80.mm, t * sy].min
+    end
+
+    # Finiture del muro per il risvolto: { r_lo:, r_hi:, interior_hi:, lo:, hi: }
+    # (spessori locali; la faccia interna è quella dell'ultimo strato).
+    def reveal_info(type, thickness, flipped)
+      return { r_lo: 0.0, r_hi: 0.0, interior_hi: true } unless type
+
+      WallTypeLibrary.reveal_info(type, thickness, flipped).merge(interior_hi: !flipped)
+    end
+
+    # Risvolto delle finiture per Geometry.build_wall: spessore, piano del
+    # serramento di ogni apertura e materiali delle due facce. nil se il
+    # muro non ha strati di finitura sulle facce.
+    def wall_reveals(model, type, thickness, flipped, openings, positions, sy)
+      info = reveal_info(type, thickness, flipped)
+      r = [info[:r_lo], info[:r_hi]].max
+      return nil unless type && r > Geometry::TOL * 10
+
+      splits = openings.each_with_index.map do |o, i|
+        depth = frame_depth(o[2] <= Geometry::TOL ? 'door' : 'window', thickness, sy) / sy
+        OpeningTypes.frame_offset(thickness, depth, positions[i] || 'center', interior_hi: info[:interior_hi],
+                                  r_lo: info[:r_lo], r_hi: info[:r_hi]) + depth / 2.0
+      end
+      { r: r, splits: splits, mat_lo: WallTypeLibrary.material_for(model, info[:lo]),
+        mat_hi: WallTypeLibrary.material_for(model, info[:hi]) }
+    end
+
     # Trasformazione (coordinate del contesto del muro) e profondità della
-    # porta o finestra nel vano rect del muro.
-    def opening_frame(wall, kind, rect)
+    # porta o finestra nel vano rect del muro, con il serramento nella
+    # posizione indicata dello spessore.
+    def opening_frame(model, wall, kind, rect, position)
       a, _b, c, _d = rect
       wall_tr = wall.transformation
-      t = wall_geom(wall)[:thickness]
+      g = wall_geom(wall)
+      t = g[:thickness]
       sy = Geometry.scales(wall_tr)[1]
-      depth = [kind == 'door' ? 100.mm : 80.mm, t * sy].min
-      origin = Geom::Point3d.new(a, t / 2.0, c).transform(wall_tr)
-      xaxis = X_AXIS.transform(wall_tr)
-      [Geometry.frame_transform(origin.offset(Z_AXIS * xaxis.normalize, -depth / 2.0), xaxis), depth]
+      depth = frame_depth(kind, t, sy)
+      info = reveal_info(WallTypeLibrary.find(model, g[:type_id]), t, g[:flipped])
+      y0 = OpeningTypes.frame_offset(t, depth / sy, position, interior_hi: info[:interior_hi],
+                                                          r_lo: info[:r_lo], r_hi: info[:r_hi])
+      origin = Geom::Point3d.new(a, y0, c).transform(wall_tr)
+      [Geometry.frame_transform(origin, X_AXIS.transform(wall_tr)), depth]
+    end
+
+    # Ricostruisce sul posto un'apertura esistente nel vano rect.
+    def replace_opening(model, opening, wall, rect, position = depth_position(opening))
+      kind = BimData.type_key(opening)
+      type = OpeningTypes.for_kind(kind, opening.get_attribute(BimData::DICT, 'opening_type'))
+      place_opening(model, opening, wall, kind, rect, type, position)
     end
 
     # Costruisce la porta o finestra nel vano rect del muro: in un nuovo
     # gruppo, oppure (group) sostituendo la geometria di un'apertura esistente.
-    def place_opening(model, group, wall, kind, rect, type)
+    def place_opening(model, group, wall, kind, rect, type, position = OpeningTypes.position(type))
       a, b, c, d = rect
       sx, _sy, sz = Geometry.scales(wall.transformation)
-      tr, depth = opening_frame(wall, kind, rect)
+      tr, depth = opening_frame(model, wall, kind, rect, position)
       w = (b - a) * sx
       h = (d - c) * sz
       build = lambda do |ents|
@@ -759,6 +836,7 @@ module BIMSketch
       group.set_attribute(BimData::DICT, 'opening_type', type['id'])
       group.set_attribute(BimData::DICT, 'operation', type['operation'])
       group.set_attribute(BimData::DICT, 'object_type', type['name'])
+      group.set_attribute(BimData::DICT, 'depth_position', position)
       store_placement(group, rect)
       group
     end
@@ -781,7 +859,7 @@ module BIMSketch
 
       # Muri con lo stesso GlobalId (copiati insieme alle aperture): quello in
       # cui l'apertura è al suo posto, altrimenti il più vicino.
-      walls.find { |w| opening_in_place?(w, opening) } ||
+      walls.find { |w| opening_in_place?(model, w, opening) } ||
         walls.min_by { |w| w.bounds.center.distance(opening.bounds.center) }
     end
 
@@ -789,15 +867,15 @@ module BIMSketch
     # che coincide con l'ingombro dell'apertura (coordinate locali del muro).
     def opening_rect_of(wall, opening)
       stored = stored_rect(opening)
-      if stored && opening_in_place?(wall, opening)
+      if stored && opening_in_place?(wall.model, wall, opening)
         found = wall_openings(wall).find { |r| same_rect?(r, stored) }
         return found if found
       end
       inv = wall.transformation.inverse
       pts = (0..7).map { |i| opening.bounds.corner(i).transform(inv) }
       box = [pts.map(&:x).min, pts.map(&:x).max, pts.map(&:z).min, pts.map(&:z).max].map(&:to_f)
-      best = wall_openings(wall).min_by { |r| r.zip(box).sum { |u, v| (u - v).abs } }
-      best && best.zip(box).all? { |u, v| (u - v).abs < 5.mm } ? best : nil
+      best = wall_openings(wall).min_by { |r| r.first(4).zip(box).sum { |u, v| (u - v).abs } }
+      best && best.first(4).zip(box).all? { |u, v| (u - v).abs < 5.mm } ? best : nil
     end
 
     def stored_rect(opening)
@@ -808,11 +886,11 @@ module BIMSketch
     end
 
     # L'apertura è ancora dove l'ha messa BIMSketch rispetto al suo muro?
-    def opening_in_place?(wall, opening)
+    def opening_in_place?(model, wall, opening)
       rect = stored_rect(opening)
       return false unless rect
 
-      tr, = opening_frame(wall, BimData.type_key(opening), rect)
+      tr, = opening_frame(model, wall, BimData.type_key(opening), rect, depth_position(opening))
       same_transform?(tr, opening.transformation)
     end
 
@@ -839,8 +917,22 @@ module BIMSketch
                           ignore: old)
       return false unless rect
 
-      rebuild_wall_openings(model, wall, wall_openings(wall).map { |r| same_rect?(r, old) ? rect : r })
-      place_opening(model, opening, wall, kind, rect, type)
+      position = OpeningTypes.position(type)
+      rebuild_wall_openings(model, wall, wall_openings(wall).map { |r| same_rect?(r, old) ? rect : r },
+                            override: [rect, position])
+      place_opening(model, opening, wall, kind, rect, type, position)
+      true
+    end
+
+    # Cambia la posizione del serramento nello spessore del muro
+    # ('center', 'inner', 'outer'): il risvolto delle finiture si adegua.
+    def set_depth_position(model, opening, position)
+      wall = host_wall(model, opening)
+      rect = wall && opening_rect_of(wall, opening)
+      return false unless rect && wall_intact?(wall) && OpeningTypes::POSITIONS.key?(position)
+
+      rebuild_wall_openings(model, wall, wall_openings(wall), override: [rect, position])
+      replace_opening(model, opening, wall, rect, position)
       true
     end
 
@@ -879,9 +971,10 @@ module BIMSketch
       return false if strict && (rect[0] * sx - left).abs > 0.5.mm
       return true if same_rect?(rect, old)
 
-      rebuild_wall_openings(model, wall, wall_openings(wall).map { |r| same_rect?(r, old) ? rect : r })
-      type = OpeningTypes.for_kind(kind, opening.get_attribute(BimData::DICT, 'opening_type'))
-      place_opening(model, opening, wall, kind, rect, type)
+      position = depth_position(opening)
+      rebuild_wall_openings(model, wall, wall_openings(wall).map { |r| same_rect?(r, old) ? rect : r },
+                            override: [rect, position])
+      replace_opening(model, opening, wall, rect, position)
       true
     end
 

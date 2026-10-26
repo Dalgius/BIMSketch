@@ -146,14 +146,18 @@
   // Posizione di porta o finestra nel muro (inviata solo se modificata).
   function renderOpeningPosition(o) {
     if (o.left === undefined) return '';
+    var depthOpts = (o.depths || []).map(function (d) { return { value: d.id, label: d.name }; });
     var html = '<h2>Posizione nel muro</h2><div class="panel">' +
+      row('Serramento nello spessore', '<select id="f_opening_depth">' + options(depthOpts, o.depth) + '</select>') +
       row('Distanza dall\'inizio del muro (m)', '<input id="f_opening_left" class="num" data-orig="' + BIM.num(o.left, 3) +
         '" value="' + BIM.num(o.left, 3) + '">');
     if (o.sill !== undefined) {
       html += row('Davanzale (m)', '<input id="f_opening_sill" class="num" data-orig="' + BIM.num(o.sill, 3) +
         '" value="' + BIM.num(o.sill, 3) + '">');
     }
-    html += '<div class="muted">Distanza del lato sinistro del vano dall\'inizio del muro (nel verso di disegno). ' +
+    html += '<div class="muted">Filo interno/esterno: il telaio si appoggia al nucleo del muro verso la faccia interna/esterna ' +
+      '(la faccia esterna è quella del primo strato della stratigrafia); le finiture risvoltano nel vano fino al telaio. ' +
+      'Distanza: lato sinistro del vano dall\'inizio del muro (nel verso di disegno). ' +
       'Il foro viene ritagliato nella nuova posizione; per spostarla a mano usa lo strumento Sposta apertura.</div>';
     return html + '</div>';
   }
@@ -283,6 +287,8 @@
     });
     var ot = BIM.$('f_opening_type_id');
     if (ot) el.opening_type_id = ot.value;
+    var od = BIM.$('f_opening_depth');
+    if (od) el.opening_depth = od.value;
     var st = BIM.$('f_slab_type_id');
     if (st) el.slab_type_id = st.value;
     var auto = BIM.$('f_auto_height');

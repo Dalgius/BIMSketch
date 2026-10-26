@@ -1001,7 +1001,7 @@ module BIMSketchAutotest
         "#{tools.size} strumenti"
       end
       check('File dei dialoghi presenti') do
-        %w[properties levels schedule checker].each do |n|
+        %w[panel schedule checker].each do |n|
           f = File.join(BIMSketch::Dialogs::HTML_DIR, "#{n}.html")
           assert(File.exist?(f), "manca #{f}")
         end

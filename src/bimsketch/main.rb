@@ -14,16 +14,9 @@ module BIMSketch
 
   module_function
 
-  def properties_dialog
-    @properties_dialog ||= Dialogs::Properties.new
-  end
-
-  def levels_dialog
-    @levels_dialog ||= Dialogs::LevelsManager.new
-  end
-
-  def wall_types_dialog
-    @wall_types_dialog ||= Dialogs::WallTypesManager.new
+  # Pannello unico: schede Proprietà, Stratigrafie e Livelli.
+  def panel
+    @panel ||= Dialogs::Panel.new
   end
 
   def schedule_dialog
@@ -91,13 +84,13 @@ module BIMSketch
         Commands.classify_selection
       },
       properties: command('Proprietà BIM', 'properties', 'Mostra e modifica le proprietà BIM.') {
-        properties_dialog.show
+        panel.show_tab('properties')
       },
       levels: command('Livelli', 'levels', 'Gestisce i livelli (piani) dell\'edificio.') {
-        levels_dialog.show
+        panel.show_tab('levels')
       },
       wall_types: command('Stratigrafie', 'layers', 'Stratigrafie di muri e solai: strati, materiali, spessori e trasmittanza U.') {
-        wall_types_dialog.show
+        panel.show_tab('types')
       },
       schedule: command('Abaco quantità', 'schedule', 'Abaco delle quantità degli elementi BIM.') {
         schedule_dialog.show
@@ -159,7 +152,7 @@ module BIMSketch
       next if sel.empty?
 
       sub = menu.add_submenu(EXTENSION_NAME)
-      sub.add_item('Proprietà BIM') { properties_dialog.show }
+      sub.add_item('Proprietà BIM') { panel.show_tab('properties') }
       classify = sub.add_submenu('Classifica come')
       ElementTypes.all.each do |t|
         classify.add_item("#{t.label} (#{t.ifc_class})") { Commands.classify_selection(t.key) }

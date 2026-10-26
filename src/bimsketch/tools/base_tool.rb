@@ -66,7 +66,7 @@ module BIMSketch
           Settings.edit
           Sketchup.active_model.active_view.invalidate
         end
-        menu.add_item('Livelli...') { BIMSketch.levels_dialog.show }
+        menu.add_item('Livelli...') { BIMSketch.panel.show_tab('levels') }
       end
 
       def draw(view)

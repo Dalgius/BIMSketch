@@ -17,7 +17,7 @@ dalla geometria reale.
 | **Stratigrafie** | Librerie di tipologie di muro e di solaio/copertura (strati con materiale, spessore, conduttività λ e funzione); strati visibili come solidi colorati, con aperture e giunti nei muri, finiture che risvoltano nei vani delle aperture; nei solai gli strati vanno dall'estradosso all'intradosso e la faccia superiore resta alla quota del livello; trasmittanza U secondo UNI EN ISO 6946 (flusso orizzontale, verso il basso o verso l'alto) scritta nel Pset; computo dei materiali; IfcMaterialLayerSet nell'IFC |
 | **Elemento da faccia** | Crea solai, coperture, fondazioni, rivestimenti o **spazi (locali)** estrudendo le facce selezionate, anche inclinate e con fori |
 | **Classificazione** | Trasforma gruppi, componenti o geometria esistenti in elementi BIM: 14 categorie IFC (IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcDoor, IfcWindow, IfcRoof, IfcStair, IfcRailing, IfcCovering, IfcFooting, IfcFurniture, IfcSpace, IfcBuildingElementProxy) con tipo predefinito, tag SketchUp e materiale di categoria. Se nel modello è caricato uno schema IFC applica anche la classificazione nativa di SketchUp |
-| **Proprietà BIM** | Pannello che segue la selezione: categoria, tipo predefinito, nome, tipologia (ObjectType), livello, materiale, GlobalId, altezza di muri e pilastri (numerica o automatica dal livello), **Pset standard** (Pset_WallCommon, Pset_DoorCommon, …: portante, esterno, REI, trasmittanza U, ecc.), proprietà personalizzate e quantità calcolate. Modifica multipla su più elementi |
+| **Pannello BIMSketch** | Un unico pannello con le schede **Proprietà**, **Stratigrafie** e **Livelli**, intestazione con la selezione corrente e azioni sempre visibili in basso (più collegamenti ad Abaco, Verifica ed Esporta IFC). La scheda Proprietà segue la selezione: categoria, tipo predefinito, nome, tipologia (ObjectType), livello, materiale, GlobalId, altezza di muri e pilastri (numerica o automatica dal livello), **Pset standard** (Pset_WallCommon, Pset_DoorCommon, …: portante, esterno, REI, trasmittanza U, ecc.), proprietà personalizzate e quantità calcolate. Modifica multipla su più elementi |
 | **Livelli** | Piani dell'edificio (IfcBuildingStorey) con quota e altezza; livello corrente per gli strumenti; seleziona/isola/assegna elementi; cambiando la quota gli elementi del piano si spostano, cambiando l'altezza muri e pilastri automatici si adeguano e le travi restano sotto il piano superiore; **vista in pianta** automatica (piano di sezione + scena) |
 | **Abaco quantità** | Tabella filtrabile di tutti gli elementi con lunghezze, spessori, altezze, superfici e volumi, riepilogo per categoria, selezione nel modello, **esportazione CSV** per Excel (separatore `;`, virgola decimale) |
 | **Quantità IFC** | Qto_*BaseQuantities calcolate dalla geometria: lunghezza, spessore, altezza, impronta, superficie laterale lorda/netta (al netto delle aperture), superfici, perimetro, volume lordo/netto |
@@ -91,7 +91,7 @@ src/
     │   ├── collector.rb      # raccolta elementi, misure e mesh
     │   └── settings.rb       # impostazioni utente
     ├── tools/                # strumenti interattivi (Muro, Solaio, …)
-    ├── ui/                   # dialog HTML (Proprietà, Livelli, Abaco, Verifica)
+    ├── ui/                   # pannello unico (Proprietà, Stratigrafie, Livelli), Abaco, Verifica
     └── icons/                # icone SVG (Windows) e PNG (macOS)
 ```
 

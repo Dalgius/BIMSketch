@@ -109,13 +109,13 @@
     var opts = (types || (w && w.types) || []).map(function (t) { return { value: t.id, label: t.name + ' (' + t.summary + ')' }; });
     var html = '<h2>Stratigrafia</h2><div class="panel">';
     if (multi) {
-      html += row('Tipologia', '<select id="f_wall_type_id"><option value="(invariato)">(invariato)</option>' +
+      html += row('Stratigrafia', '<select id="f_wall_type_id"><option value="(invariato)">(invariato)</option>' +
         '<option value="">(nessuna: muro unico)</option>' + options(opts, '') + '</select>') +
         row('Strati invertiti', '<select id="f_wall_flipped">' +
           options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No' }], '', '(invariato)') + '</select>');
       return html + '</div>';
     }
-    html += row('Tipologia', '<select id="f_wall_type_id">' + options(opts, w.type_id, '(nessuna: muro unico)') + '</select>') +
+    html += row('Stratigrafia', '<select id="f_wall_type_id">' + options(opts, w.type_id, '(nessuna: muro unico)') + '</select>') +
       row('Strati invertiti', '<input type="checkbox" id="f_wall_flipped"' + (w.flipped ? ' checked' : '') + '>');
     if (w.layers.length) {
       html += '<table style="margin-top:6px"><thead><tr><th>Strato</th><th>Materiale</th><th class="num">cm</th><th class="num">λ</th></tr></thead><tbody>';
@@ -133,16 +133,24 @@
     return html + '</div>';
   }
 
-  // Tipologia di porta o finestra: cambiandola l'apertura prende le
-  // dimensioni della nuova tipologia e il foro nel muro viene ritagliato.
-  function renderOpening(o, multi, types) {
+  // Tipologia di porta o finestra (scrive anche l'ObjectType): cambiandola
+  // l'apertura prende le dimensioni della nuova tipologia e il foro nel muro
+  // viene ritagliato.
+  function openingTypeRow(o, multi, types) {
     var opts = (types || (o && o.types) || []).map(function (t) { return { value: t.id, label: t.name }; });
-    var html = '<h2>Tipologia apertura</h2><div class="panel">';
-    html += row('Tipologia', '<select id="f_opening_type_id">' +
+    return row('Tipologia', '<select id="f_opening_type_id" title="Cambiando tipologia l\'apertura prende le sue dimensioni (stesso centro nel muro)">' +
       (multi || !o.type_id ? '<option value="(invariato)">(invariato)</option>' : '') +
       options(opts, multi ? '' : o.type_id) + '</select>');
-    html += '<div class="muted">Cambiando tipologia l\'apertura prende le sue dimensioni (stesso centro nel muro).</div>';
-    return html + '</div>';
+  }
+
+  // Tipologia (ObjectType) nel riquadro principale: per porte e finestre è
+  // la tipologia della libreria; per muri e solai con stratigrafia è il
+  // nome della stratigrafia (sola lettura).
+  function objectTypeRow(e) {
+    if (e.opening) return openingTypeRow(e.opening, false);
+    var typed = (e.wall && e.wall.type_id) || (e.slab && e.slab.type_id);
+    if (typed) return row('Tipologia (ObjectType)', '<input readonly title="Dalla stratigrafia" value="' + BIM.esc(e.object_type) + '">');
+    return row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="es. Muratura laterizio 30 cm" value="' + BIM.esc(e.object_type) + '">');
   }
 
   // Tipologia (stratigrafia) di solai e coperture: strati dall'estradosso.
@@ -150,11 +158,11 @@
     var opts = (types || (s && s.types) || []).map(function (t) { return { value: t.id, label: t.name + ' (' + t.summary + ')' }; });
     var html = '<h2>Stratigrafia del solaio</h2><div class="panel">';
     if (multi) {
-      html += row('Tipologia', '<select id="f_slab_type_id"><option value="(invariato)">(invariato)</option>' +
+      html += row('Stratigrafia', '<select id="f_slab_type_id"><option value="(invariato)">(invariato)</option>' +
         '<option value="">(nessuna: solaio unico)</option>' + options(opts, '') + '</select>');
       return html + '</div>';
     }
-    html += row('Tipologia', '<select id="f_slab_type_id">' + options(opts, s.type_id, '(nessuna: solaio unico)') + '</select>');
+    html += row('Stratigrafia', '<select id="f_slab_type_id">' + options(opts, s.type_id, '(nessuna: solaio unico)') + '</select>');
     if (s.layers.length) {
       html += '<table style="margin-top:6px"><thead><tr><th>Strato (dall\'alto)</th><th>Materiale</th><th class="num">cm</th><th class="num">λ</th></tr></thead><tbody>';
       s.layers.forEach(function (l) {
@@ -178,7 +186,7 @@
       row('Categoria IFC', '<select id="f_type">' + options(typeOptions(), e.type) + '</select>') +
       row('Tipo predefinito', '<select id="f_predefined">' + options(predefinedOptions(e.type), e.predefined) + '</select>') +
       row('Nome', '<input id="f_name" value="' + BIM.esc(e.name) + '">') +
-      row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="es. Muratura laterizio 30 cm" value="' + BIM.esc(e.object_type) + '">') +
+      objectTypeRow(e) +
       row('Livello', '<select id="f_level">' + options(levelOptions(), e.level, '(automatico)') + '</select>') +
       row('Materiale BIM', '<input id="f_material" placeholder="' + BIM.esc(e.sketchup_material) + '" value="' + BIM.esc(e.material) + '">') +
       row('IFC GlobalId', '<input readonly value="' + BIM.esc(e.guid) + '">') +
@@ -186,7 +194,6 @@
     html += renderDims(e.dims, false);
     if (e.wall) html += renderWall(e.wall, false);
     if (e.slab) html += renderSlab(e.slab, false);
-    if (e.opening) html += renderOpening(e.opening, false);
     html += '<div id="propsBox">' + renderProps(e.type, e.props, false) + '</div>';
     html += renderCustom(e.custom);
     html += '<h2>Quantità</h2><div class="panel">';
@@ -208,12 +215,12 @@
     html += '</div><h2>Modifica comune</h2><div class="panel">' +
       row('Categoria IFC', '<select id="f_type">' + options(typeOptions(), '', '(invariato)') + '</select>') +
       row('Livello', '<select id="f_level">' + options(levelOptions(), '', '(invariato)') + '</select>') +
-      row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="(invariato)">') +
+      (state.opening_types ? openingTypeRow(null, true, state.opening_types) :
+        row('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="(invariato)">')) +
       row('Materiale BIM', '<input id="f_material" placeholder="(invariato)">') + '</div>';
     html += renderDims(state.dims ? {} : null, true);
     if (state.wall_types) html += renderWall(null, true, state.wall_types);
     if (state.slab_types) html += renderSlab(null, true, state.slab_types);
-    if (state.opening_types) html += renderOpening(null, true, state.opening_types);
     html += '<div id="propsBox">' + (state.common_type ? renderProps(state.common_type, {}, true) : '') + '</div>';
     html += '<div class="toolbar"><button class="primary" id="save">Applica a tutti</button>' +
       '<button id="refresh">Aggiorna</button></div>';

@@ -133,6 +133,18 @@
     return html + '</div>';
   }
 
+  // Tipologia di porta o finestra: cambiandola l'apertura prende le
+  // dimensioni della nuova tipologia e il foro nel muro viene ritagliato.
+  function renderOpening(o, multi, types) {
+    var opts = (types || (o && o.types) || []).map(function (t) { return { value: t.id, label: t.name }; });
+    var html = '<h2>Tipologia apertura</h2><div class="panel">';
+    html += row('Tipologia', '<select id="f_opening_type_id">' +
+      (multi || !o.type_id ? '<option value="(invariato)">(invariato)</option>' : '') +
+      options(opts, multi ? '' : o.type_id) + '</select>');
+    html += '<div class="muted">Cambiando tipologia l\'apertura prende le sue dimensioni (stesso centro nel muro).</div>';
+    return html + '</div>';
+  }
+
   // Tipologia (stratigrafia) di solai e coperture: strati dall'estradosso.
   function renderSlab(s, multi, types) {
     var opts = (types || (s && s.types) || []).map(function (t) { return { value: t.id, label: t.name + ' (' + t.summary + ')' }; });
@@ -174,6 +186,7 @@
     html += renderDims(e.dims, false);
     if (e.wall) html += renderWall(e.wall, false);
     if (e.slab) html += renderSlab(e.slab, false);
+    if (e.opening) html += renderOpening(e.opening, false);
     html += '<div id="propsBox">' + renderProps(e.type, e.props, false) + '</div>';
     html += renderCustom(e.custom);
     html += '<h2>Quantità</h2><div class="panel">';
@@ -200,6 +213,7 @@
     html += renderDims(state.dims ? {} : null, true);
     if (state.wall_types) html += renderWall(null, true, state.wall_types);
     if (state.slab_types) html += renderSlab(null, true, state.slab_types);
+    if (state.opening_types) html += renderOpening(null, true, state.opening_types);
     html += '<div id="propsBox">' + (state.common_type ? renderProps(state.common_type, {}, true) : '') + '</div>';
     html += '<div class="toolbar"><button class="primary" id="save">Applica a tutti</button>' +
       '<button id="refresh">Aggiorna</button></div>';
@@ -240,6 +254,8 @@
       var fl = BIM.$('f_wall_flipped');
       el.wall_flipped = fl.type === 'checkbox' ? fl.checked : fl.value;
     }
+    var ot = BIM.$('f_opening_type_id');
+    if (ot) el.opening_type_id = ot.value;
     var st = BIM.$('f_slab_type_id');
     if (st) el.slab_type_id = st.value;
     var auto = BIM.$('f_auto_height');

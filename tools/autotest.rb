@@ -415,6 +415,42 @@ module BIMSketchAutotest
           end
         end
       end
+      check('Cambio tipologia: finestra a due ante → un\'anta → due ante') do
+        b = BIMSketch::Builder
+        wall = @e[:host_window]
+        win = model.entities.find do |e|
+          BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == 'W2' &&
+            e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+        end
+        guid = BIMSketch::BimData.guid(win)
+        vol = volume_m3(wall)
+        model.start_operation('Autotest cambio tipologia apertura', true)
+        ok = b.change_opening_type(model, win, 'W1')
+        model.commit_operation
+        assert(ok, 'tipologia non cambiata')
+        assert(BIMSketch::BimData.guid(win) == guid, 'GlobalId cambiato')
+        assert(BIMSketch::BimData.read(win)['object_type'] == "Finestra a un'anta", 'ObjectType non aggiornato')
+        res = [approx((win.bounds.max.x - win.bounds.min.x).to_m, 0.8, 0.002, 'larghezza'),
+               approx(volume_m3(wall), vol + 0.4 * 1.4 * 0.3, 0.002, 'volume muro (foro più stretto)')]
+        model.start_operation('Autotest ripristino tipologia apertura', true)
+        ok = b.change_opening_type(model, win, 'W2')
+        model.commit_operation
+        assert(ok, 'ritorno a due ante non riuscito')
+        res << approx(volume_m3(wall), vol, 0.002, 'volume muro ripristinato')
+        res.join(', ')
+      end
+      check('Cambio tipologia che non entra nel muro rifiutato') do
+        b = BIMSketch::Builder
+        model.start_operation('Autotest muro corto', true)
+        short = b.wall(model, pt(0, 160, 0), pt(1.2, 160, 0), 0.3.m, 3.m, 'center')
+        door = b.opening(model, short, 'door', 0.6.m, 0.9.m, 2.1.m, 0, type_id: 'D1')
+        model.commit_operation
+        model.start_operation('Autotest cambio tipologia rifiutato', true)
+        ok = b.change_opening_type(model, door, 'D2') # 1,40 m in un muro lungo 1,20 m
+        model.commit_operation
+        assert(!ok, 'cambio accettato anche se la porta non entra')
+        approx((door.bounds.max.x - door.bounds.min.x).to_m, 0.9, 0.002, 'larghezza invariata')
+      end
       check('Tipo di apertura nell\'IFC') do
         records = BIMSketch::Collector.collect(model, mesh: true)
         levels = BIMSketch::Levels.all(model)

@@ -146,6 +146,10 @@ module BIMSketch
           data['dims'] = elements.any? { |e| Builder.element_height(model, e) }
           data['wall_types'] = wall_types_payload if elements.any? { |e| Builder.parametric_wall?(e) }
           data['slab_types'] = wall_types_payload('slab') if elements.any? { |e| Builder.parametric_slab?(e) }
+          kinds = elements.map { |e| BimData.type_key(e) }.uniq
+          if kinds.size == 1 && %w[door window].include?(kinds.first)
+            data['opening_types'] = opening_types_payload(kinds.first)
+          end
           data['summary'] = elements.group_by { |e| BimData.type(e) }.map do |t, es|
             { 'label' => t ? t.plural : '?', 'count' => es.size }
           end
@@ -222,6 +226,10 @@ module BIMSketch
             'thickness' => (g[:thickness] * sz).to_m * 100
           }
         end
+        if %w[door window].include?(BimData.type_key(entity)) && Builder.host_wall(model, entity)
+          data['opening'] = { 'type_id' => entity.get_attribute(BimData::DICT, 'opening_type').to_s,
+                              'types' => opening_types_payload(BimData.type_key(entity)) }
+        end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
       end
@@ -252,6 +260,23 @@ module BIMSketch
         return true if (target - info[:height]).abs < 0.5.mm && !(auto == false && info[:auto])
 
         Builder.set_height(model, entity, height: target, auto: false)
+      end
+
+      def opening_types_payload(kind)
+        OpeningTypes.all(kind).map do |t|
+          dims = format('%d x %d cm', (t['width'] * 100).round, (t['height'] * 100).round)
+          dims += format(', davanzale %d cm', (t['sill'] * 100).round) if t['sill'].positive?
+          { 'id' => t['id'], 'name' => "#{t['name']} (#{dims})" }
+        end
+      end
+
+      # Tipologia di porta o finestra (campo 'opening_type_id').
+      def apply_opening_type(entity, el)
+        id = el['opening_type_id'].to_s
+        return true unless %w[door window].include?(BimData.type_key(entity))
+        return true if id.empty? || id == '(invariato)' || id == entity.get_attribute(BimData::DICT, 'opening_type')
+
+        Builder.change_opening_type(model, entity, id)
       end
 
       def wall_types_payload(kind = 'wall')
@@ -322,6 +347,7 @@ module BIMSketch
           failed += 1 unless apply_height(elements.first, data['element'] || {})
           failed += 1 unless apply_wall_type(elements.first, data['element'] || {})
           failed += 1 unless apply_slab_type(elements.first, data['element'] || {})
+          failed += 1 unless apply_opening_type(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
@@ -335,6 +361,7 @@ module BIMSketch
             failed += 1 unless apply_height(e, changes)
             failed += 1 unless apply_wall_type(e, changes)
             failed += 1 unless apply_slab_type(e, changes)
+            failed += 1 unless apply_opening_type(e, changes)
           end
           failed += change_level(elements, changes['level'])
         end
@@ -343,7 +370,7 @@ module BIMSketch
         push('saved', true)
         if failed.positive?
           ::UI.messagebox("#{failed} modifiche di altezza o tipologia non applicate: gli elementi sono stati " \
-                          'modificati a mano oppure le loro aperture non entrerebbero.')
+                          'modificati a mano oppure le aperture non entrerebbero nel muro.')
         end
       rescue StandardError
         model.abort_operation

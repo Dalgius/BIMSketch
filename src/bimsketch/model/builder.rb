@@ -655,7 +655,9 @@ module BIMSketch
     # Calcola il rettangolo dell'apertura (coordinate locali del muro).
     # Restituisce [a, b, c, d] oppure nil se non entra nel muro o si
     # sovrappone a un'altra apertura.
-    def opening_rect(wall, local_x, width, height, sill)
+    # ignore: rettangolo di un'apertura esistente da non considerare (quando
+    # la si sostituisce).
+    def opening_rect(wall, local_x, width, height, sill, ignore: nil)
       sx, _sy, sz = Geometry.scales(wall.transformation)
       g = wall_geom(wall)
       return nil unless g
@@ -678,9 +680,15 @@ module BIMSketch
 
       a = [[local_x - w / 2.0, x0 + margin].max, x1 - margin - w].min
       rect = [a, a + w, c, c + h].map(&:to_f)
-      return nil if WallProfile.overlaps?(rect, wall_openings(wall), gap)
+      others = wall_openings(wall)
+      others = others.reject { |r| same_rect?(r, ignore) } if ignore
+      return nil if WallProfile.overlaps?(rect, others, gap)
 
       rect
+    end
+
+    def same_rect?(r, q)
+      r.zip(q).all? { |u, v| (u - v).abs < 0.5.mm }
     end
 
     # Inserisce una porta o una finestra in un muro parametrico: taglia il
@@ -692,8 +700,19 @@ module BIMSketch
 
       raise "il muro è stato modificato a mano: non è possibile inserire l'apertura" unless wall_intact?(wall)
 
-      a, b, c, d = rect
-      openings = wall_openings(wall) + [rect]
+      rebuild_wall_openings(model, wall, wall_openings(wall) + [rect])
+      group = place_opening(model, nil, wall, kind, rect, OpeningTypes.for_kind(kind, type_id))
+      finish(model, group, kind, { 'host' => BimData.guid(wall) }, level: BimData.level_id(wall))
+      external = BimData.json_attr(wall, 'props')['IsExternal']
+      unless external.nil?
+        props = BimData.json_attr(group, 'props').merge('IsExternal' => external)
+        group.set_attribute(BimData::DICT, 'props', JSON.generate(props))
+      end
+      group
+    end
+
+    # Ricostruisce il muro con le aperture indicate (coordinate locali).
+    def rebuild_wall_openings(model, wall, openings)
       g = wall_geom(wall)
       type = WallTypeLibrary.find(model, g[:type_id])
       layers = type ? WallTypeLibrary.geometry_layers(model, type, g[:thickness], g[:flipped]) : nil
@@ -703,35 +722,79 @@ module BIMSketch
                           layers: layers)
       store_wall_geom(wall, g)
       wall.set_attribute(BimData::DICT, 'openings', JSON.generate(openings))
+    end
+
+    # Costruisce la porta o finestra nel vano rect del muro: in un nuovo
+    # gruppo, oppure (group) sostituendo la geometria di un'apertura esistente.
+    def place_opening(model, group, wall, kind, rect, type)
+      a, b, c, d = rect
       wall_tr = wall.transformation
-      t = g[:thickness]
-      _sx, sy, = Geometry.scales(wall_tr)
+      t = wall_geom(wall)[:thickness]
+      sx, sy, sz = Geometry.scales(wall_tr)
       depth = [kind == 'door' ? 100.mm : 80.mm, t * sy].min
-      type = OpeningTypes.for_kind(kind, type_id)
       origin = Geom::Point3d.new(a, t / 2.0, c).transform(wall_tr)
       xaxis = X_AXIS.transform(wall_tr)
-      world_origin = origin.offset(Z_AXIS * xaxis.normalize, -depth / 2.0)
-      tr = Geometry.frame_transform(world_origin, xaxis)
-      # Il muro può trovarsi nel contesto attivo: le coordinate sono già quelle del contesto.
-      tr = model.edit_transform * tr if model.active_path
-      w_world = (b - a) * Geometry.scales(wall_tr)[0]
-      h_world = (d - c) * Geometry.scales(wall_tr)[2]
-      group = Geometry.create_group(model, tr) do |ents|
-        if kind == 'door'
-          build_door(model, ents, type, w_world, depth, h_world)
-        else
-          build_window(model, ents, type, w_world, depth, h_world)
-        end
+      # Coordinate del contesto del muro.
+      tr = Geometry.frame_transform(origin.offset(Z_AXIS * xaxis.normalize, -depth / 2.0), xaxis)
+      w = (b - a) * sx
+      h = (d - c) * sz
+      build = lambda do |ents|
+        kind == 'door' ? build_door(model, ents, type, w, depth, h) : build_window(model, ents, type, w, depth, h)
       end
-      finish(model, group, kind, { 'host' => BimData.guid(wall), 'opening_type' => type['id'],
-                                   'operation' => type['operation'] }, level: BimData.level_id(wall))
+      if group
+        group.make_unique if group.respond_to?(:make_unique)
+        group.definition.entities.clear!
+        build.call(group.definition.entities)
+        group.transformation = tr
+      else
+        group = Geometry.create_group(model, model.active_path ? model.edit_transform * tr : tr, &build)
+      end
+      group.set_attribute(BimData::DICT, 'opening_type', type['id'])
+      group.set_attribute(BimData::DICT, 'operation', type['operation'])
       group.set_attribute(BimData::DICT, 'object_type', type['name'])
-      external = BimData.json_attr(wall, 'props')['IsExternal']
-      unless external.nil?
-        props = BimData.json_attr(group, 'props').merge('IsExternal' => external)
-        group.set_attribute(BimData::DICT, 'props', JSON.generate(props))
-      end
       group
+    end
+
+    # Muro parametrico (nel contesto attivo) che ospita l'apertura.
+    def host_wall(model, opening)
+      host = opening.get_attribute(BimData::DICT, 'host')
+      return nil if host.to_s.empty?
+
+      model.active_entities.find { |e| parametric_wall?(e) && BimData.guid(e) == host }
+    end
+
+    # Vano del muro occupato dall'apertura: il rettangolo registrato nel muro
+    # che coincide con l'ingombro dell'apertura (coordinate locali del muro).
+    def opening_rect_of(wall, opening)
+      inv = wall.transformation.inverse
+      pts = (0..7).map { |i| opening.bounds.corner(i).transform(inv) }
+      box = [pts.map(&:x).min, pts.map(&:x).max, pts.map(&:z).min, pts.map(&:z).max].map(&:to_f)
+      best = wall_openings(wall).min_by { |r| r.zip(box).sum { |u, v| (u - v).abs } }
+      best && best.zip(box).all? { |u, v| (u - v).abs < 5.mm } ? best : nil
+    end
+
+    # Cambia la tipologia di una porta o finestra: prende le dimensioni della
+    # nuova tipologia (stesso centro nel muro), il foro nel muro viene
+    # ritagliato e l'apertura ricostruita mantenendo GlobalId e proprietà.
+    # false se l'apertura non entra o il muro non è ricostruibile.
+    def change_opening_type(model, opening, type_id)
+      kind = BimData.type_key(opening)
+      return false unless %w[door window].include?(kind)
+
+      wall = host_wall(model, opening)
+      return false unless wall && wall_intact?(wall)
+
+      old = opening_rect_of(wall, opening)
+      return false unless old
+
+      type = OpeningTypes.for_kind(kind, type_id)
+      rect = opening_rect(wall, (old[0] + old[1]) / 2.0, type['width'].m, type['height'].m, type['sill'].m,
+                          ignore: old)
+      return false unless rect
+
+      rebuild_wall_openings(model, wall, wall_openings(wall).map { |r| same_rect?(r, old) ? rect : r })
+      place_opening(model, opening, wall, kind, rect, type)
+      true
     end
 
     # Porta: telaio a U (senza traverso a terra) e ante piene, scorrevoli o vetrate.

@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8">
-<title>Tipologie muro</title>
+<title>Stratigrafie</title>
 <link rel="stylesheet" href="common.css">
 <script src="common.js"></script>
 <style>
@@ -18,11 +18,14 @@
   .layers td { padding: 3px 4px; }
   .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; }
   .result { display: flex; gap: 18px; margin-top: 8px; font-weight: 600; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .tabs button.sel { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   @media (max-width: 640px) { .layout { flex-direction: column; } .list { flex: none; width: 100%; } }
 </style>
 </head>
 <body>
-<h1>Tipologie muro (stratigrafie)</h1>
+<h1 id="title">Stratigrafie</h1>
+<div class="tabs"><button data-kind="wall">Muri</button><button data-kind="slab">Solai e coperture</button></div>
 <div id="error" class="notice error-text" style="display:none"></div>
 <div class="layout">
   <div class="list panel">
@@ -38,18 +41,27 @@
 <div class="toolbar">
   <button class="primary" id="save">Salva libreria</button>
   <button id="assign">Assegna ai muri selezionati</button>
-  <label class="muted"><input type="checkbox" id="flipped"> strati invertiti</label>
+  <label class="muted" id="flippedBox"><input type="checkbox" id="flipped"> strati invertiti</label>
   <span class="muted" id="selInfo"></span>
 </div>
-<p class="muted">Gli strati sono elencati dalla faccia destra del muro (rispetto alla direzione di disegno)
-  alla faccia sinistra; "strati invertiti" li percorre al contrario. Salvando, i muri che usano una tipologia
-  modificata vengono ricostruiti con il nuovo spessore e i giunti ricalcolati. La trasmittanza U è calcolata
-  secondo UNI EN ISO 6946 (Rsi 0,13 e Rse 0,04 m²K/W) quando tutti gli strati hanno la conduttività λ.</p>
+<p class="muted" id="note"></p>
 
 <script>
 (function () {
-  var state = { types: [], usage: {}, functions: {}, rsi: 0.13, rse: 0.04 };
+  var state = { kind: 'wall', types: [], usage: {}, functions: {}, rsi: 0.13, rse: 0.04 };
+  var NOTES = {
+    wall: 'Gli strati sono elencati dalla faccia destra del muro (rispetto alla direzione di disegno) ' +
+      'alla faccia sinistra; "strati invertiti" li percorre al contrario. Salvando, i muri che usano una tipologia ' +
+      'modificata vengono ricostruiti con il nuovo spessore e i giunti ricalcolati. La trasmittanza U è calcolata ' +
+      'secondo UNI EN ISO 6946 (Rsi 0,13 e Rse 0,04 m²K/W, flusso orizzontale) quando tutti gli strati hanno la conduttività λ.',
+    slab: 'Gli strati sono elencati dall\'estradosso (pavimento o manto) all\'intradosso. Assegnando una tipologia ' +
+      'la faccia superiore del solaio resta alla sua quota e lo spessore cresce verso il basso. La trasmittanza U ' +
+      'è calcolata secondo UNI EN ISO 6946 con flusso verso il basso (Rsi 0,17, Rse 0,04 m²K/W) per i solai ' +
+      'e verso l\'alto (Rsi 0,10) per le coperture; i solai controterra richiedono la UNI EN ISO 13370.'
+  };
+  var WORDS = { wall: ['muro', 'muri'], slab: ['solaio', 'solai'] };
   var current = 0;
+  var snapshot = '[]';
   var COLORS = { structure: '#be6e50', insulation: '#f4d66e', finish: '#ece8de', other: '#aaaaaa' };
 
   function num(v) {
@@ -73,8 +85,9 @@
 
   function nextId() {
     var ids = state.types.map(function (t) { return t.id; }), i = 1;
-    while (ids.indexOf('WT' + i) >= 0) i++;
-    return 'WT' + i;
+    var prefix = state.kind === 'slab' ? 'ST' : 'WT';
+    while (ids.indexOf(prefix + i) >= 0) i++;
+    return prefix + i;
   }
 
   function drawList() {
@@ -82,7 +95,7 @@
     state.types.forEach(function (t, i) {
       var used = state.usage[t.id] || 0;
       html += '<div class="item' + (i === current ? ' sel' : '') + '" data-i="' + i + '">' + BIM.esc(t.name) +
-        '<small>' + BIM.num(thickness(t) * 100, 1) + ' cm' + (used ? ' · ' + used + ' muri' : '') + '</small></div>';
+        '<small>' + BIM.num(thickness(t) * 100, 1) + ' cm' + (used ? ' · ' + used + ' ' + WORDS[state.kind][1] : '') + '</small></div>';
     });
     BIM.$('types').innerHTML = html || '<span class="muted">Nessuna tipologia.</span>';
   }
@@ -141,16 +154,26 @@
   }
 
   BIM.render = function (d) {
-    var id = state.types[current] && state.types[current].id;
+    var id = state.kind === d.kind && state.types[current] && state.types[current].id;
     state = d;
+    snapshot = JSON.stringify(d.types);
     var idx = state.types.map(function (t) { return t.id; }).indexOf(id);
     current = idx >= 0 ? idx : 0;
-    BIM.$('selInfo').textContent = d.selected ? d.selected + ' muri selezionati' : 'nessun muro selezionato';
+    var w = WORDS[d.kind] || WORDS.wall;
+    BIM.$('selInfo').textContent = d.selected ? d.selected + ' ' + w[1] + ' selezionati' : 'nessun ' + w[0] + ' selezionato';
+    BIM.$('assign').textContent = 'Assegna ai ' + w[1] + ' selezionati';
+    BIM.$('flippedBox').style.display = d.kind === 'slab' ? 'none' : '';
+    BIM.$('note').textContent = NOTES[d.kind] || NOTES.wall;
+    BIM.$('title').textContent = d.kind === 'slab' ? 'Stratigrafie dei solai' : 'Stratigrafie dei muri';
+    document.querySelectorAll('.tabs button').forEach(function (b) {
+      b.className = b.getAttribute('data-kind') === d.kind ? 'sel' : '';
+    });
     drawList();
     drawEditor();
   };
 
   BIM.saved = function () {
+    snapshot = JSON.stringify(state.types);
     var b = BIM.$('save');
     b.textContent = 'Salvata ✓';
     setTimeout(function () { b.textContent = 'Salva libreria'; }, 1200);
@@ -189,7 +212,9 @@
   BIM.$('newType').addEventListener('click', function () {
     readEditor();
     state.types.push({ id: nextId(), name: 'Nuova tipologia',
-      layers: [{ name: 'Muratura', material: 'Laterizio', thickness: 0.25, lambda: 0.4, function: 'structure' }] });
+      layers: state.kind === 'slab'
+        ? [{ name: 'Soletta', material: 'Calcestruzzo armato', thickness: 0.20, lambda: 2.3, function: 'structure' }]
+        : [{ name: 'Muratura', material: 'Laterizio', thickness: 0.25, lambda: 0.4, function: 'structure' }] });
     current = state.types.length - 1;
     drawList();
     drawEditor();
@@ -210,11 +235,19 @@
     var t = state.types[current];
     if (!t) return;
     var used = state.usage[t.id] || 0;
-    if (!confirm('Eliminare la tipologia "' + t.name + '"?' + (used ? '\n' + used + ' muri torneranno a un unico strato.' : ''))) return;
+    if (!confirm('Eliminare la tipologia "' + t.name + '"?' + (used ? '\n' + used + ' ' + WORDS[state.kind][1] + ' torneranno a un unico strato.' : ''))) return;
     state.types.splice(current, 1);
     current = 0;
     drawList();
     drawEditor();
+  });
+  document.querySelector('.tabs').addEventListener('click', function (ev) {
+    var k = ev.target.getAttribute('data-kind');
+    if (!k || k === state.kind) return;
+    readEditor();
+    if (JSON.stringify(state.types) !== snapshot &&
+        !confirm('Le modifiche non salvate a questa libreria andranno perse. Continuare?')) return;
+    BIM.call('kind', { kind: k });
   });
   BIM.$('save').addEventListener('click', function () {
     readEditor();

@@ -217,8 +217,10 @@ module BIMSketch
       protected
 
       def update_ui
+        type = Settings.slab_type(model)
+        label = type ? "Solaio (tipologia: #{type['name']})" : 'Solaio'
         Sketchup.status_text = if @points.empty?
-                                 "Solaio: clic sul primo vertice del contorno. #{level_label} " \
+                                 "#{label}: clic sul primo vertice del contorno. #{level_label} " \
                                    '(estradosso alla quota del livello).'
                                else
                                  "Solaio: #{@points.size} vertici. Clic sul primo punto, " \
@@ -241,7 +243,8 @@ module BIMSketch
       def create
         pts = @points
         run_operation('BIMSketch: Solaio') do
-          Builder.slab(model, pts, Settings.length('slab_thickness'), level_z)
+          type = Settings.slab_type(model)
+          Builder.slab(model, pts, Settings.length('slab_thickness'), level_z, type_id: type && type['id'])
         end
         reset_tool
       end

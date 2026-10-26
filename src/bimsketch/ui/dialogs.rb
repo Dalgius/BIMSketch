@@ -145,6 +145,7 @@ module BIMSketch
           data['common_type'] = keys.size == 1 ? keys.first : nil
           data['dims'] = elements.any? { |e| Builder.element_height(model, e) }
           data['wall_types'] = wall_types_payload if elements.any? { |e| Builder.parametric_wall?(e) }
+          data['slab_types'] = wall_types_payload('slab') if elements.any? { |e| Builder.parametric_slab?(e) }
           data['summary'] = elements.group_by { |e| BimData.type(e) }.map do |t, es|
             { 'label' => t ? t.plural : '?', 'count' => es.size }
           end
@@ -169,7 +170,7 @@ module BIMSketch
           },
           'refresh' => ->(_d) { refresh },
           'levels' => ->(_d) { BIMSketch.levels_dialog.show },
-          'wall_types' => ->(_d) { BIMSketch.wall_types_dialog.show }
+          'wall_types' => ->(d) { BIMSketch.wall_types_dialog.show_kind(d['kind'] || 'wall') }
         }
       end
 
@@ -208,6 +209,19 @@ module BIMSketch
             'thickness' => g ? (g[:thickness].to_m * 100).round(2) : nil
           }
         end
+        if Builder.parametric_slab?(entity)
+          g = Builder.slab_geom(entity)
+          type = Builder.slab_type(model, entity)
+          external = BimData.json_attr(entity, 'props')['IsExternal'] == true
+          sz = Geometry.scales(entity.transformation)[2]
+          data['slab'] = {
+            'type_id' => type ? type['id'] : '', 'types' => wall_types_payload('slab'),
+            'layers' => type ? type['layers'] : [],
+            'u' => type && WallTypes.u_value(type, external: external,
+                                                   flow: WallTypes.flow_for(BimData.type_key(entity))),
+            'thickness' => (g[:thickness] * sz).to_m * 100
+          }
+        end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
       end
@@ -240,8 +254,8 @@ module BIMSketch
         Builder.set_height(model, entity, height: target, auto: false)
       end
 
-      def wall_types_payload
-        WallTypeLibrary.all(model).map do |t|
+      def wall_types_payload(kind = 'wall')
+        WallTypeLibrary.all(model, kind: kind).map do |t|
           { 'id' => t['id'], 'name' => t['name'], 'summary' => WallTypes.summary(t) }
         end
       end
@@ -269,6 +283,20 @@ module BIMSketch
         ok
       end
 
+      # Tipologia di solaio (campo 'slab_type_id'); ricalcola la trasmittanza.
+      def apply_slab_type(entity, el)
+        return true unless Builder.parametric_slab?(entity)
+
+        ok = true
+        id = el['slab_type_id']
+        unless id.nil? || id == '(invariato)' || id.to_s == Builder.slab_geom_type_id(entity).to_s
+          ok = Builder.apply_slab_type(model, entity, id.to_s.empty? ? nil : id.to_s)
+        end
+        type = Builder.slab_type(model, entity)
+        Builder.apply_slab_type_data(model, entity, type) if type
+        ok
+      end
+
       def save(data)
         elements = model.selection.select { |e| BimData.element?(e) }
         return if elements.empty?
@@ -279,6 +307,7 @@ module BIMSketch
           BimData.write(elements.first, data['element'] || {})
           failed += 1 unless apply_height(elements.first, data['element'] || {})
           failed += 1 unless apply_wall_type(elements.first, data['element'] || {})
+          failed += 1 unless apply_slab_type(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
@@ -291,6 +320,7 @@ module BIMSketch
             BimData.write(e, patch)
             failed += 1 unless apply_height(e, changes)
             failed += 1 unless apply_wall_type(e, changes)
+            failed += 1 unless apply_slab_type(e, changes)
           end
         end
         model.commit_operation
@@ -374,24 +404,33 @@ module BIMSketch
       end
     end
 
-    # Libreria delle tipologie di muro (stratigrafie).
+    # Librerie delle tipologie (stratigrafie) di muri e solai, una scheda per tipo.
     class WallTypesManager < Base
+      KIND_LABELS = { 'wall' => %w[muro muri], 'slab' => %w[solaio solai] }.freeze
+
       def initialize
-        super('BIMSketch - Tipologie muro', 'wall_types', 820, 560)
+        super('BIMSketch - Stratigrafie', 'wall_types', 820, 560)
+        @kind = 'wall'
+      end
+
+      # Apre il dialog sulla scheda indicata ('wall' o 'slab').
+      def show_kind(kind)
+        @kind = KIND_LABELS.key?(kind) ? kind : 'wall'
+        refresh if visible?
+        show
       end
 
       def refresh
-        types = WallTypeLibrary.all(model)
+        types = WallTypeLibrary.all(model, kind: @kind)
         usage = Hash.new(0)
         model.active_entities.each do |e|
-          next unless Builder.parametric_wall?(e)
-
-          g = Builder.wall_geom(e)
-          usage[g[:type_id]] += 1 if g && g[:type_id]
+          id = type_id_of(e)
+          usage[id] += 1 if id
         end
-        selected = model.selection.count { |e| Builder.parametric_wall?(e) }
-        push('render', 'types' => types, 'usage' => usage, 'selected' => selected,
-                       'functions' => WallTypes::FUNCTIONS, 'rsi' => WallTypes::RSI, 'rse' => WallTypes::RSE)
+        selected = model.selection.count { |e| target?(e) }
+        rsi = WallTypes::RSI_BY_FLOW[@kind == 'slab' ? :down : :horizontal]
+        push('render', 'kind' => @kind, 'types' => types, 'usage' => usage, 'selected' => selected,
+                       'functions' => WallTypes::FUNCTIONS, 'rsi' => rsi, 'rse' => WallTypes::RSE)
       end
 
       protected
@@ -400,23 +439,48 @@ module BIMSketch
         {
           'save' => ->(d) { save(d['types']) },
           'assign' => ->(d) { assign(d['id'], d['flipped'] == true) },
+          'kind' => lambda { |d|
+            @kind = KIND_LABELS.key?(d['kind']) ? d['kind'] : 'wall'
+            refresh
+          },
           'refresh' => ->(_d) { refresh }
         }
       end
 
+      def target?(entity)
+        @kind == 'slab' ? Builder.parametric_slab?(entity) : Builder.parametric_wall?(entity)
+      end
+
+      def type_id_of(entity)
+        if @kind == 'slab'
+          Builder.slab_geom_type_id(entity)
+        elsif Builder.parametric_wall?(entity)
+          g = Builder.wall_geom(entity)
+          g && g[:type_id]
+        end
+      end
+
+      def update_elements(id, remove: false)
+        if @kind == 'slab'
+          Builder.update_type_slabs(model, id, remove: remove)
+        else
+          Builder.update_type_walls(model, id, remove: remove)
+        end
+      end
+
       def save(types)
-        old = WallTypeLibrary.all(model)
-        model.start_operation('BIMSketch: Tipologie muro', true)
-        list = WallTypeLibrary.save(model, types)
+        old = WallTypeLibrary.all(model, kind: @kind)
+        model.start_operation('BIMSketch: Stratigrafie', true)
+        list = WallTypeLibrary.save(model, types, kind: @kind)
         failed = 0
         list.each do |t|
           before = WallTypes.find(old, t['id'])
           next if before.nil? || JSON.generate(before) == JSON.generate(t)
 
-          failed += Builder.update_type_walls(model, t['id'])
+          failed += update_elements(t['id'])
         end
         (old.map { |t| t['id'] } - list.map { |t| t['id'] }).each do |id|
-          failed += Builder.update_type_walls(model, id, remove: true)
+          failed += update_elements(id, remove: true)
         end
         model.commit_operation
         refresh
@@ -428,13 +492,20 @@ module BIMSketch
       end
 
       def assign(id, flipped)
-        walls = model.selection.select { |e| Builder.parametric_wall?(e) }
-        if walls.empty?
-          ::UI.messagebox('Seleziona uno o più muri BIMSketch.')
+        items = model.selection.select { |e| target?(e) }
+        if items.empty?
+          what = @kind == 'slab' ? 'solai o coperture' : 'muri'
+          ::UI.messagebox("Seleziona uno o più #{what} BIMSketch.")
           return
         end
         model.start_operation('BIMSketch: Assegna tipologia', true)
-        failed = walls.count { |w| !Builder.apply_wall_type(model, w, id, flipped: flipped) }
+        failed = items.count do |e|
+          if @kind == 'slab'
+            !Builder.apply_slab_type(model, e, id)
+          else
+            !Builder.apply_wall_type(model, e, id, flipped: flipped)
+          end
+        end
         model.commit_operation
         refresh
         report(failed)
@@ -446,8 +517,10 @@ module BIMSketch
       def report(failed)
         return unless failed.positive?
 
-        ::UI.messagebox("#{failed} muri non sono stati aggiornati: sono stati modificati a mano " \
-                        'oppure le loro aperture non entrerebbero.')
+        what = KIND_LABELS[@kind][1]
+        reason = 'sono stati modificati a mano'
+        reason += ' oppure le loro aperture non entrerebbero' unless @kind == 'slab'
+        ::UI.messagebox("#{failed} #{what} non sono stati aggiornati: #{reason}.")
       end
     end
 

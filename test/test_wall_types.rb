@@ -63,4 +63,36 @@ class WallTypesTest < Minitest::Test
     assert_in_delta total, parts, 1e-12
     assert_equal ext.map { |v| v.round(12) }, J.band_ext(ext, 0.4, 0.0, 0.4).values_at(0, 1, 2, 3).map { |v| v.round(12) }
   end
+
+  def test_slab_library_and_ids
+    slabs = W.default_library('slab')
+    assert_equal %w[ST1 ST2 ST3], slabs.map { |t| t['id'] }
+    assert_in_delta 0.34, W.thickness(W.find(slabs, 'ST1')), 1e-9
+    out = W.normalize([{ 'name' => 'Nuovo', 'layers' => [{ 'material' => 'Cls', 'thickness' => 0.2 }] }], 'slab')
+    assert_equal 'ST1', out[0]['id']
+    assert_equal 'ST2', W.next_id(%w[ST1], 'slab')
+    assert_equal 'WT1', W.next_id(%w[ST1])
+  end
+
+  def test_u_value_heat_flow
+    t = W.find(W.default_library('slab'), 'ST1')
+    r = t['layers'].sum { |l| l['thickness'] / l['lambda'] }
+    assert_in_delta 1.0 / (r + 0.17 + 0.04), W.u_value(t, flow: :down), 1e-9
+    assert_in_delta 1.0 / (r + 0.34), W.u_value(t, external: false, flow: :down), 1e-9
+    assert_in_delta 1.0 / (r + 0.10 + 0.04), W.u_value(t, flow: W.flow_for('roof')), 1e-9
+    assert_equal :horizontal, W.flow_for('wall')
+    assert_equal :down, W.flow_for('slab')
+  end
+
+  # The first layer of a slab is at the top; the bands tile the thickness.
+  def test_slab_bands_from_top
+    t = W.find(W.default_library('slab'), 'ST1')
+    b = W.slab_bands(t, 34.0)
+    assert_equal 5, b.size
+    assert_in_delta 34.0, b[0][1], 1e-9
+    assert_in_delta 32.5, b[0][0], 1e-9
+    assert_in_delta 0.0, b[-1][0], 1e-9
+    assert_in_delta 1.5, b[-1][1], 1e-9
+    b.each_cons(2) { |upper, lower| assert_in_delta upper[0], lower[1], 1e-9 }
+  end
 end

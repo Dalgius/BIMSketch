@@ -97,6 +97,33 @@ module BIMSketch
       true
     end
 
+    # Geometria di un solaio nel suo sistema locale: il contorno outline (e i
+    # fori holes), poligoni [[x, y], ...], estruso da z = base per thickness.
+    # layers: fasce degli strati [[z0, z1, nome, materiale SketchUp], ...]
+    # misurate da base; ogni strato diventa un gruppo annidato.
+    def build_slab(ents, outline, holes, base, thickness, layers: nil)
+      at = ->(poly, z) { poly.map { |x, y| pt(x, y, z) } }
+      if layers.nil? || layers.empty?
+        raise 'impossibile costruire il solaio' unless prism(ents, at.call(outline, base),
+                                                            holes.map { |h| at.call(h, base) }, thickness)
+
+        return true
+      end
+      layers.each_with_index do |(z0, z1, name, material), i|
+        next if z1 - z0 < TOL * 10
+
+        sub = ents.add_group
+        z = base + z0
+        raise 'impossibile costruire uno strato del solaio' unless prism(sub.entities, at.call(outline, z),
+                                                                        holes.map { |h| at.call(h, z) }, z1 - z0)
+
+        sub.name = name.to_s
+        sub.material = material if material
+        sub.set_attribute('BIMSketch', 'layer', i)
+      end
+      true
+    end
+
     # Una fascia y0..y1 del muro: il prospetto della faccia y = y0 (rientranze
     # per le porte, fori per le finestre) viene estruso fino a y = y1; poi i
     # vertici delle testate sulla faccia y1 vengono spostati per inclinarle.

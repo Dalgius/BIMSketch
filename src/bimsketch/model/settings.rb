@@ -7,7 +7,7 @@ module BIMSketch
 
     DEFAULTS = {
       'wall_thickness' => 300, 'wall_height' => 0, 'wall_align' => 'center', 'wall_type' => '',
-      'slab_thickness' => 250,
+      'slab_thickness' => 250, 'slab_type' => '',
       'column_width' => 300, 'column_depth' => 300,
       'beam_width' => 300, 'beam_height' => 500,
       'door_width' => 900, 'door_height' => 2100,
@@ -36,11 +36,16 @@ module BIMSketch
       WallTypeLibrary.find(model, get('wall_type'))
     end
 
+    # Tipologia di solaio predefinita per lo strumento Solaio (nil = spessore libero).
+    def slab_type(model = Sketchup.active_model)
+      WallTypeLibrary.find(model, get('slab_type'), kind: 'slab')
+    end
+
     def edit
       fields = [
         ['wall_thickness', 'Muro: spessore (mm)'],
         ['wall_height', 'Muro: altezza (mm, 0 = altezza del livello)'],
-        ['slab_thickness', 'Solaio: spessore (mm)'],
+        ['slab_thickness', 'Solaio: spessore (mm, senza tipologia)'],
         ['column_width', 'Pilastro: larghezza (mm)'],
         ['column_depth', 'Pilastro: profondità (mm)'],
         ['beam_width', 'Trave: larghezza (mm)'],
@@ -53,18 +58,23 @@ module BIMSketch
       ]
       none = '(nessuna: spessore libero)'
       types = WallTypeLibrary.all(Sketchup.active_model)
+      slab_types = WallTypeLibrary.all(Sketchup.active_model, kind: 'slab')
       current = WallTypes.find(types, get('wall_type'))
-      prompts = ['Muro: tipologia (stratigrafia)', 'Muro: allineamento'] + fields.map(&:last)
-      defaults = [current ? current['name'] : none, ALIGN_LABELS[get('wall_align')] || 'Asse'] +
-                 fields.map { |k, _| get(k).to_s }
-      lists = [([none] + types.map { |t| t['name'] }).join('|'), ALIGN_LABELS.values.join('|')] +
-              Array.new(fields.size, '')
+      current_slab = WallTypes.find(slab_types, get('slab_type'))
+      prompts = ['Muro: tipologia (stratigrafia)', 'Muro: allineamento', 'Solaio: tipologia (stratigrafia)'] +
+                fields.map(&:last)
+      defaults = [current ? current['name'] : none, ALIGN_LABELS[get('wall_align')] || 'Asse',
+                  current_slab ? current_slab['name'] : none] + fields.map { |k, _| get(k).to_s }
+      lists = [([none] + types.map { |t| t['name'] }).join('|'), ALIGN_LABELS.values.join('|'),
+               ([none] + slab_types.map { |t| t['name'] }).join('|')] + Array.new(fields.size, '')
       result = UI.inputbox(prompts, defaults, lists, 'BIMSketch - Impostazioni elementi')
       return false unless result
 
       chosen = types.find { |t| t['name'] == result.shift }
       set('wall_type', chosen ? chosen['id'] : '')
       set('wall_align', ALIGN_LABELS.key(result.shift) || 'center')
+      chosen_slab = slab_types.find { |t| t['name'] == result.shift }
+      set('slab_type', chosen_slab ? chosen_slab['id'] : '')
       fields.each_with_index do |(key, _), i|
         v = result[i].to_s.tr(',', '.').to_f
         min = key == 'wall_height' || key == 'window_sill' ? 0 : 1

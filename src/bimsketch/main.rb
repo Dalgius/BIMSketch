@@ -92,7 +92,7 @@ module BIMSketch
       levels: command('Livelli', 'levels', 'Gestisce i livelli (piani) dell\'edificio.') {
         levels_dialog.show
       },
-      wall_types: command('Tipologie muro', 'layers', 'Stratigrafie dei muri: strati, materiali, spessori e trasmittanza U.') {
+      wall_types: command('Stratigrafie', 'layers', 'Stratigrafie di muri e solai: strati, materiali, spessori e trasmittanza U.') {
         wall_types_dialog.show
       },
       schedule: command('Abaco quantità', 'schedule', 'Abaco delle quantità degli elementi BIM.') {

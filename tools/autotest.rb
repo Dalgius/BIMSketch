@@ -98,6 +98,7 @@ module BIMSketchAutotest
       run_separate_walls
       run_openings
       run_opening_types
+      run_sketchup_move
       run_other_elements
       run_level_change
       run_classification
@@ -500,6 +501,86 @@ module BIMSketchAutotest
           assert(text.include?(op), "#{op} mancante")
         end
         'OperationType e PartitioningType presenti'
+      end
+    end
+
+    def find_opening(wall, type_id)
+      model.entities.find do |e|
+        BIMSketch::BimData.element?(e) && e.get_attribute('BIMSketch', 'opening_type') == type_id &&
+          e.get_attribute('BIMSketch', 'host') == BIMSketch::BimData.guid(wall)
+      end
+    end
+
+    # Simula uno spostamento fatto con lo Sposta di SketchUp e la correzione
+    # automatica che BIMSketch fa al termine dell'operazione.
+    def sketchup_move(entity, vector, copy: false)
+      model.start_operation('Autotest Sposta di SketchUp', true)
+      target = copy ? entity.copy : entity
+      target.transform!(Geom::Transformation.translation(vector))
+      model.commit_operation
+      model.start_operation('Autotest correzione aperture', true)
+      messages = BIMSketch::OpeningSync.process(model)
+      model.commit_operation
+      [target, messages]
+    end
+
+    def run_sketchup_move
+      puts "\n[Sposta di SketchUp]"
+      b = BIMSketch::Builder
+      wall = @e[:host_window]
+      check('Finestra spostata lungo il muro: il foro segue') do
+        w1 = find_opening(wall, 'W1')
+        vol = volume_m3(wall)
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(0.5.m, 0, 0))
+        assert(msgs.empty?, msgs.join(' '))
+        assert(BIMSketch::OpeningSync.candidates(model).empty?, 'aperture non allineate')
+        [approx(b.opening_position(model, w1)[:left].to_m, 1.1, 0.001, 'distanza dall\'inizio'),
+         approx(volume_m3(wall), vol, 0.002, 'volume muro invariato')].join(', ')
+      end
+      check('Finestra spostata in alto: cambia il davanzale') do
+        w1 = find_opening(wall, 'W1')
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(0, 0, 0.2.m))
+        assert(msgs.empty?, msgs.join(' '))
+        approx(b.opening_position(model, w1)[:sill].to_m, 1.1, 0.001, 'davanzale')
+      end
+      check('Spostamento sopra un\'altra finestra: torna al suo posto') do
+        w1 = find_opening(wall, 'W1')
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(1.0.m, 0, 0))
+        assert(msgs.size == 1, "messaggi: #{msgs.inspect}")
+        assert(BIMSketch::OpeningSync.candidates(model).empty?, 'apertura non riportata al suo posto')
+        approx(b.opening_position(model, w1)[:left].to_m, 1.1, 0.001, 'distanza invariata')
+      end
+      check('Finestra portata lontano dal muro: torna al suo posto') do
+        w1 = find_opening(wall, 'W1')
+        _, msgs = sketchup_move(w1, Geom::Vector3d.new(0, 3.m, 0))
+        assert(msgs.size == 1, "messaggi: #{msgs.inspect}")
+        approx(w1.bounds.center.y.to_m, 150.0, 0.01, 'di nuovo nel muro')
+      end
+      check('Copia con Ctrl: diventa una nuova finestra') do
+        w1 = find_opening(wall, 'W1')
+        n = b.wall_openings(wall).size
+        vol = volume_m3(wall)
+        copy, msgs = sketchup_move(w1, Geom::Vector3d.new(4.4.m, 0, 0), copy: true)
+        assert(msgs.empty?, msgs.join(' '))
+        assert(copy.valid?, 'copia eliminata')
+        assert(BIMSketch::BimData.guid(copy) != BIMSketch::BimData.guid(w1), 'GlobalId duplicato')
+        assert(b.wall_openings(wall).size == n + 1, 'foro della copia mancante')
+        [approx(b.opening_position(model, copy)[:left].to_m, 5.5, 0.001, 'posizione copia'),
+         approx(volume_m3(wall), vol - 0.8 * 1.4 * 0.3, 0.002, 'volume muro')].join(', ')
+      end
+      check('Copia sopra un\'altra finestra: eliminata') do
+        w1 = find_opening(wall, 'W1')
+        n = b.wall_openings(wall).size
+        copy, msgs = sketchup_move(w1, Geom::Vector3d.new(1.2.m, 0, 0), copy: true)
+        assert(msgs.size == 1 && !copy.valid?, "copia non eliminata (#{msgs.inspect})")
+        assert(b.wall_openings(wall).size == n, 'fori cambiati')
+        'ok'
+      end
+      check('Muro spostato da solo: le finestre lo seguono') do
+        _, msgs = sketchup_move(wall, Geom::Vector3d.new(0, 0.5.m, 0))
+        assert(msgs.empty?, msgs.join(' '))
+        assert(BIMSketch::OpeningSync.candidates(model).empty?, 'aperture rimaste indietro')
+        approx(find_opening(wall, 'W2').bounds.center.y.to_m, 150.5, 0.01, 'finestra a due ante')
       end
     end
 

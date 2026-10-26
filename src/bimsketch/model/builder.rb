@@ -724,18 +724,25 @@ module BIMSketch
       wall.set_attribute(BimData::DICT, 'openings', JSON.generate(openings))
     end
 
+    # Trasformazione (coordinate del contesto del muro) e profondità della
+    # porta o finestra nel vano rect del muro.
+    def opening_frame(wall, kind, rect)
+      a, _b, c, _d = rect
+      wall_tr = wall.transformation
+      t = wall_geom(wall)[:thickness]
+      sy = Geometry.scales(wall_tr)[1]
+      depth = [kind == 'door' ? 100.mm : 80.mm, t * sy].min
+      origin = Geom::Point3d.new(a, t / 2.0, c).transform(wall_tr)
+      xaxis = X_AXIS.transform(wall_tr)
+      [Geometry.frame_transform(origin.offset(Z_AXIS * xaxis.normalize, -depth / 2.0), xaxis), depth]
+    end
+
     # Costruisce la porta o finestra nel vano rect del muro: in un nuovo
     # gruppo, oppure (group) sostituendo la geometria di un'apertura esistente.
     def place_opening(model, group, wall, kind, rect, type)
       a, b, c, d = rect
-      wall_tr = wall.transformation
-      t = wall_geom(wall)[:thickness]
-      sx, sy, sz = Geometry.scales(wall_tr)
-      depth = [kind == 'door' ? 100.mm : 80.mm, t * sy].min
-      origin = Geom::Point3d.new(a, t / 2.0, c).transform(wall_tr)
-      xaxis = X_AXIS.transform(wall_tr)
-      # Coordinate del contesto del muro.
-      tr = Geometry.frame_transform(origin.offset(Z_AXIS * xaxis.normalize, -depth / 2.0), xaxis)
+      sx, _sy, sz = Geometry.scales(wall.transformation)
+      tr, depth = opening_frame(wall, kind, rect)
       w = (b - a) * sx
       h = (d - c) * sz
       build = lambda do |ents|
@@ -752,7 +759,16 @@ module BIMSketch
       group.set_attribute(BimData::DICT, 'opening_type', type['id'])
       group.set_attribute(BimData::DICT, 'operation', type['operation'])
       group.set_attribute(BimData::DICT, 'object_type', type['name'])
+      store_placement(group, rect)
       group
+    end
+
+    # Registra il vano occupato nel muro e la posizione dell'apertura:
+    # OpeningSync li confronta per riconoscere gli spostamenti fatti con gli
+    # strumenti di SketchUp.
+    def store_placement(opening, rect)
+      opening.set_attribute(BimData::DICT, 'wall_rect', JSON.generate(rect.map(&:to_f)))
+      opening.set_attribute(BimData::DICT, 'placed_tr', JSON.generate(opening.transformation.to_a))
     end
 
     # Muro parametrico (nel contesto attivo) che ospita l'apertura.
@@ -760,17 +776,48 @@ module BIMSketch
       host = opening.get_attribute(BimData::DICT, 'host')
       return nil if host.to_s.empty?
 
-      model.active_entities.find { |e| parametric_wall?(e) && BimData.guid(e) == host }
+      walls = model.active_entities.select { |e| parametric_wall?(e) && BimData.guid(e) == host }
+      return walls.first if walls.size < 2
+
+      # Muri con lo stesso GlobalId (copiati insieme alle aperture): quello in
+      # cui l'apertura è al suo posto, altrimenti il più vicino.
+      walls.find { |w| opening_in_place?(w, opening) } ||
+        walls.min_by { |w| w.bounds.center.distance(opening.bounds.center) }
     end
 
     # Vano del muro occupato dall'apertura: il rettangolo registrato nel muro
     # che coincide con l'ingombro dell'apertura (coordinate locali del muro).
     def opening_rect_of(wall, opening)
+      stored = stored_rect(opening)
+      if stored && opening_in_place?(wall, opening)
+        found = wall_openings(wall).find { |r| same_rect?(r, stored) }
+        return found if found
+      end
       inv = wall.transformation.inverse
       pts = (0..7).map { |i| opening.bounds.corner(i).transform(inv) }
       box = [pts.map(&:x).min, pts.map(&:x).max, pts.map(&:z).min, pts.map(&:z).max].map(&:to_f)
       best = wall_openings(wall).min_by { |r| r.zip(box).sum { |u, v| (u - v).abs } }
       best && best.zip(box).all? { |u, v| (u - v).abs < 5.mm } ? best : nil
+    end
+
+    def stored_rect(opening)
+      raw = opening.get_attribute(BimData::DICT, 'wall_rect')
+      raw && JSON.parse(raw)
+    rescue JSON::ParserError
+      nil
+    end
+
+    # L'apertura è ancora dove l'ha messa BIMSketch rispetto al suo muro?
+    def opening_in_place?(wall, opening)
+      rect = stored_rect(opening)
+      return false unless rect
+
+      tr, = opening_frame(wall, BimData.type_key(opening), rect)
+      same_transform?(tr, opening.transformation)
+    end
+
+    def same_transform?(t1, t2)
+      t1.to_a.zip(t2.to_a).all? { |u, v| (u - v).abs < 1e-4 }
     end
 
     # Cambia la tipologia di una porta o finestra: prende le dimensioni della

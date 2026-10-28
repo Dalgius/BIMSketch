@@ -1132,6 +1132,17 @@ module BIMSketchAutotest
         "scena \"#{page.name}\" creata, sezione attiva a #{format('%.2f', -n[3] / n[2] * 0.0254)} m " \
           '(verifica a occhio, vedi sotto)'
       end
+      check('Ritorno alla vista 3D; la pianta riusa il suo piano di sezione') do
+        planes = model.entities.grep(Sketchup::SectionPlane).size
+        BIMSketch::Levels.create_plan_view(model, 'L0')
+        assert(model.entities.grep(Sketchup::SectionPlane).size == planes, 'nuovo piano di sezione a ogni pianta')
+        page = BIMSketch::Levels.view_3d(model)
+        assert(page && model.pages['Vista 3D'], 'scena Vista 3D non creata')
+        assert(model.entities.active_section_plane.nil?, 'sezione ancora attiva')
+        assert(model.active_view.camera.perspective?, 'vista non in prospettiva')
+        BIMSketch::Levels.create_plan_view(model, 'L0') # la pianta resta per i controlli successivi
+        'sezione disattivata, scena "Vista 3D" creata'
+      end
       check('In pianta porte e finestre trovano il muro sotto il cursore') do
         down = Geom::Vector3d.new(0, 0, -1)
         hit = BIMSketch::Builder.wall_under_ray(model, [pt(2.5, 0.05, 50), down])

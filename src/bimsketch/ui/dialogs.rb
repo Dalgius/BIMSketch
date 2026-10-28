@@ -588,6 +588,7 @@ module BIMSketch
           'isolate' => ->(d) { Levels.isolate(model, d['id']) },
           'show_all' => ->(_d) { Levels.isolate(model, nil) },
           'plan_view' => ->(d) { Levels.create_plan_view(model, d['id']) },
+          'view_3d' => ->(_d) { Levels.view_3d(model) },
           'assign' => lambda { |d|
             n = Commands.assign_selection_to_level(d['id'])
             ::UI.messagebox('Seleziona prima uno o più elementi BIM.') if n.to_i.zero?

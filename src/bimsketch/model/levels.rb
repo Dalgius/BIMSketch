@@ -167,8 +167,14 @@ module BIMSketch
       z = (lvl['elevation'] + [1.2, lvl['height'] * 0.9].min).m
       # La normale del piano punta verso la parte che resta visibile (verificato
       # in SketchUp 2026): verso il basso per conservare ciò che sta sotto il taglio.
-      sp = model.entities.add_section_plane([0, 0, z], [0, 0, -1])
-      sp.name = "Pianta #{lvl['name']}" if sp.respond_to?(:name=)
+      plane_name = "Pianta #{lvl['name']}"
+      sp = model.entities.grep(Sketchup::SectionPlane).find { |e| e.respond_to?(:name) && e.name == plane_name }
+      if sp
+        sp.set_plane([0, 0, -1, z])
+      else
+        sp = model.entities.add_section_plane([0, 0, z], [0, 0, -1])
+        sp.name = plane_name if sp.respond_to?(:name=)
+      end
       sp.activate
       view = model.active_view
       bb = model.bounds
@@ -180,6 +186,32 @@ module BIMSketch
       view.camera = camera
       view.zoom_extents
       name = "Pianta - #{lvl['name']}"
+      old_page = model.pages[name]
+      model.pages.erase(old_page) if old_page && model.pages.respond_to?(:erase)
+      page = model.pages.add(name)
+      page.use_section_planes = true if page.respond_to?(:use_section_planes=)
+      model.commit_operation
+      page
+    end
+
+    # Torna alla vista 3D: nessun piano di sezione attivo, vista assonometrica
+    # in prospettiva su tutto il modello, salvata nella scena "Vista 3D".
+    def view_3d(model)
+      model.start_operation('BIMSketch: Vista 3D', true)
+      model.entities.active_section_plane = nil if model.entities.respond_to?(:active_section_plane=)
+      if model.active_path
+        model.active_entities.active_section_plane = nil if model.active_entities.respond_to?(:active_section_plane=)
+      end
+      bb = model.bounds
+      center = bb.empty? ? Geom::Point3d.new(0, 0, 0) : bb.center
+      d = bb.empty? ? 20.m : [bb.diagonal, 1.m].max
+      eye = Geom::Point3d.new(center.x - d, center.y - d, center.z + d * 0.8)
+      camera = Sketchup::Camera.new(eye, center, Z_AXIS)
+      camera.perspective = true
+      view = model.active_view
+      view.camera = camera
+      view.zoom_extents
+      name = 'Vista 3D'
       old_page = model.pages[name]
       model.pages.erase(old_page) if old_page && model.pages.respond_to?(:erase)
       page = model.pages.add(name)

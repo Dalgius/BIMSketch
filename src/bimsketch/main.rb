@@ -120,6 +120,9 @@ module BIMSketch
                          'Rigenera gli identificativi IFC duplicati dopo copia/incolla.') {
         Commands.fix_duplicate_guids
       },
+      view_3d: command('Vista 3D', nil, 'Toglie la sezione della vista in pianta e torna alla vista 3D.') {
+        Levels.view_3d(Sketchup.active_model)
+      },
       reverse_section: command('Inverti sezione attiva', nil,
                                'Inverte il verso del piano di sezione attivo.') {
         Commands.reverse_section
@@ -140,7 +143,7 @@ module BIMSketch
     menu.add_separator
     %i[schedule checker ifc csv].each { |k| menu.add_item(c[k]) }
     menu.add_separator
-    %i[settings fix_guids reverse_section about].each { |k| menu.add_item(c[k]) }
+    %i[settings fix_guids view_3d reverse_section about].each { |k| menu.add_item(c[k]) }
   end
 
   def setup_toolbar

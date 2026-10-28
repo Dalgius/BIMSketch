@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>BIMSketch</title>
+<link rel="stylesheet" href="common.css">
+<script src="common.js"></script>
+<script src="panel.js"></script>
+</head>
+<body class="app">
+<header class="app-header">
+  <div class="brand">
+    <div class="logo" data-icon="logo"></div>
+    <div style="min-width:0">
+      <div><span class="brand-name">BIMSketch</span><span class="version" id="version">IFC4</span></div>
+      <div class="selection" id="selection">Nessuna selezione</div>
+    </div>
+  </div>
+  <button class="ghost icon" id="refreshAll" title="Aggiorna" data-icon="refresh"></button>
+</header>
+<nav class="tabs">
+  <button class="tab" data-tab="properties"><span data-icon="doc"></span>Proprietà</button>
+  <button class="tab" data-tab="types"><span data-icon="layers"></span>Stratigrafie</button>
+  <button class="tab" data-tab="levels"><span data-icon="levels"></span>Livelli</button>
+</nav>
+<main class="app-body">
+  <div id="error" class="notice error-text" style="display:none"></div>
+  <section class="tab-pane" id="tab-properties"><div class="empty">Caricamento…</div></section>
+  <section class="tab-pane" id="tab-types">
+    <div class="seg" id="t_kinds"><button data-kind="wall">Muri</button><button data-kind="slab">Solai e coperture</button></div>
+    <div class="card">
+      <div class="card-head"><span class="card-title" id="t_title">Tipologie</span>
+        <span>
+          <button class="small" id="t_new" title="Nuova tipologia">+ Nuova</button>
+          <button class="small" id="t_dup" title="Duplica la tipologia">Duplica</button>
+          <button class="small danger" id="t_del" title="Elimina la tipologia">Elimina</button>
+        </span>
+      </div>
+      <div class="list" id="t_list"></div>
+    </div>
+    <div class="card" id="t_editor"></div>
+    <p class="muted small-text" id="t_note"></p>
+  </section>
+  <section class="tab-pane" id="tab-levels">
+    <div id="l_list"></div>
+    <label class="check muted"><input type="checkbox" id="l_move" checked> sposta gli elementi se cambia la quota</label>
+    <p class="muted small-text">Il livello corrente (●) è usato dagli strumenti di disegno: muri e pilastri partono dalla
+      sua quota, i solai hanno l'estradosso alla sua quota e le travi sotto il livello superiore. Cambiando
+      l'altezza di un livello, muri e pilastri con altezza automatica si adeguano e le travi si spostano;
+      l'altezza di un singolo elemento si imposta nella scheda Proprietà.</p>
+  </section>
+</main>
+<footer class="app-footer">
+  <div class="actions" id="actions-properties">
+    <button class="primary" id="p_apply"><span data-icon="check"></span><span>Applica</span></button>
+    <button id="p_refresh"><span data-icon="refresh"></span>Aggiorna</button>
+  </div>
+  <div class="actions" id="actions-types">
+    <button class="primary" id="t_save"><span data-icon="check"></span><span>Salva libreria</span></button>
+    <button id="t_assign"><span data-icon="assign"></span><span>Assegna</span></button>
+  </div>
+  <div class="actions" id="actions-levels">
+    <button class="primary" id="l_save"><span data-icon="check"></span><span>Salva livelli</span></button>
+    <button id="l_add"><span data-icon="plus"></span>Nuovo livello</button>
+  </div>
+  <div class="toast" id="status"></div>
+  <div class="statusbar">
+    <a id="openSchedule"><span data-icon="table"></span>Abaco</a>
+    <a id="openChecker"><span data-icon="shield"></span>Verifica</a>
+    <a id="exportIfc"><span data-icon="export"></span>Esporta IFC…</a>
+  </div>
+</footer>
+<script src="panel_properties.js"></script>
+<script src="panel_types.js"></script>
+<script src="panel_levels.js"></script>
+</body>
+</html>

@@ -124,10 +124,130 @@ module BIMSketch
       end
     end
 
-    # Pannello Proprietà BIM: mostra e modifica i dati della selezione.
-    class Properties < Base
+    # Sezione del pannello unico: stessa logica di un dialog, ma i dati vanno
+    # alla scheda del pannello (BIM.<scheda>.<funzione> nella pagina) e le
+    # callback vengono registrate dal pannello con il prefisso "<scheda>_".
+    class Section < Base
+      def initialize(panel, key)
+        super('', key, 0, 0)
+        @panel = panel
+        @key = key
+      end
+
+      def visible?
+        @panel.visible?
+      end
+
+      def section_callbacks
+        callbacks
+      end
+
+      protected
+
+      def push(function, data)
+        @panel.script(function == 'error' ? 'error' : "#{@key}.#{function}", data)
+      end
+    end
+
+    # Pannello unico di BIMSketch: schede Proprietà, Stratigrafie e Livelli.
+    class Panel < Base
+      TABS = %w[properties types levels].freeze
+
+      attr_reader :tab
+
       def initialize
-        super('BIMSketch - Proprietà BIM', 'properties', 420, 680)
+        super('BIMSketch', 'panel', 400, 780)
+        @sections = { 'properties' => Properties.new(self), 'types' => WallTypesManager.new(self),
+                      'levels' => LevelsManager.new(self) }
+        @tab = 'properties'
+      end
+
+      # Mostra il pannello sulla scheda indicata; kind ('wall' o 'slab')
+      # sceglie la libreria nella scheda Stratigrafie.
+      def show_tab(tab, kind: nil)
+        @tab = tab if @sections.key?(tab)
+        @sections['types'].kind = kind if kind
+        if visible?
+          refresh
+          @dialog.bring_to_front
+        else
+          show
+        end
+      end
+
+      def refresh
+        push('panel.header', header_payload)
+        push('panel.tab', @tab)
+        @sections[@tab].refresh
+      end
+
+      def script(function, data)
+        push(function, data)
+      end
+
+      protected
+
+      def callbacks
+        cb = {
+          'tab' => ->(d) { show_tab(d['tab'].to_s, kind: d['kind']) },
+          'refresh' => ->(_d) { refresh },
+          'schedule' => ->(_d) { BIMSketch.schedule_dialog.show },
+          'checker' => ->(_d) { BIMSketch.checker_dialog.show },
+          'export_ifc' => ->(_d) { Commands.export_ifc }
+        }
+        @sections.each do |key, section|
+          section.section_callbacks.each { |name, handler| cb["#{key}_#{name}"] = handler }
+        end
+        cb
+      end
+
+      def on_open
+        @model = model
+        @watcher = SelectionWatcher.new { selection_changed }
+        @model.selection.add_observer(@watcher)
+      end
+
+      def on_closed
+        @model.selection.remove_observer(@watcher) if @model && @watcher && @model.valid?
+        @watcher = nil
+      end
+
+      # La selezione è cambiata: aggiorna l'intestazione e la scheda che la
+      # mostra (la libreria delle stratigrafie non viene ridisegnata, per non
+      # perdere le modifiche non salvate).
+      def selection_changed
+        return unless visible?
+
+        push('panel.header', header_payload)
+        case @tab
+        when 'properties' then @sections['properties'].refresh
+        when 'types' then @sections['types'].selection_changed
+        end
+      end
+
+      def header_payload
+        sel = model.selection
+        elements = sel.select { |e| BimData.element?(e) }
+        text = if elements.size == 1
+                 e = elements.first
+                 t = BimData.type(e)
+                 name = e.name.to_s
+                 "Selezione: #{t ? t.label : 'Elemento'}#{name.empty? ? '' : " · #{name}"}"
+               elsif elements.size > 1
+                 "#{elements.size} elementi BIM selezionati"
+               elsif sel.empty?
+                 'Nessuna selezione'
+               else
+                 "#{sel.size} oggetti non classificati"
+               end
+        { 'version' => VERSION, 'selection' => text, 'active' => !elements.empty? }
+      end
+    end
+
+    # Scheda Proprietà BIM: mostra e modifica i dati della selezione.
+    class Properties < Section
+      def initialize(panel)
+        super(panel, 'properties')
       end
 
       def refresh
@@ -172,21 +292,8 @@ module BIMSketch
             Commands.declassify_selection
             refresh
           },
-          'refresh' => ->(_d) { refresh },
-          'levels' => ->(_d) { BIMSketch.levels_dialog.show },
-          'wall_types' => ->(d) { BIMSketch.wall_types_dialog.show_kind(d['kind'] || 'wall') }
+          'refresh' => ->(_d) { refresh }
         }
-      end
-
-      def on_open
-        @model = model
-        @watcher = SelectionWatcher.new { refresh if visible? }
-        @model.selection.add_observer(@watcher)
-      end
-
-      def on_closed
-        @model.selection.remove_observer(@watcher) if @model && @watcher && @model.valid?
-        @watcher = nil
       end
 
       def element_payload(entity)
@@ -411,10 +518,10 @@ module BIMSketch
       end
     end
 
-    # Gestione livelli (piani dell'edificio).
-    class LevelsManager < Base
-      def initialize
-        super('BIMSketch - Livelli', 'levels', 560, 460)
+    # Scheda Livelli (piani dell'edificio).
+    class LevelsManager < Section
+      def initialize(panel)
+        super(panel, 'levels')
       end
 
       def refresh
@@ -432,6 +539,7 @@ module BIMSketch
           'save' => lambda { |d|
             Levels.update(model, d['levels'], move_elements: d['move'] != false)
             refresh
+            push('saved', true)
             n = Levels.skipped_last_update
             if n.positive?
               ::UI.messagebox("#{n} muri/pilastri non hanno preso la nuova altezza del livello: sono stati " \
@@ -479,20 +587,24 @@ module BIMSketch
       end
     end
 
-    # Librerie delle tipologie (stratigrafie) di muri e solai, una scheda per tipo.
-    class WallTypesManager < Base
+    # Scheda Stratigrafie: librerie delle tipologie di muri e solai.
+    class WallTypesManager < Section
       KIND_LABELS = { 'wall' => %w[muro muri], 'slab' => %w[solaio solai] }.freeze
 
-      def initialize
-        super('BIMSketch - Stratigrafie', 'wall_types', 820, 560)
+      attr_reader :kind
+
+      def initialize(panel)
+        super(panel, 'types')
         @kind = 'wall'
       end
 
-      # Apre il dialog sulla scheda indicata ('wall' o 'slab').
-      def show_kind(kind)
-        @kind = KIND_LABELS.key?(kind) ? kind : 'wall'
-        refresh if visible?
-        show
+      def kind=(value)
+        @kind = KIND_LABELS.key?(value) ? value : 'wall'
+      end
+
+      # Aggiorna soltanto il numero di elementi selezionati.
+      def selection_changed
+        push('selection', model.selection.count { |e| target?(e) })
       end
 
       def refresh
@@ -515,7 +627,7 @@ module BIMSketch
           'save' => ->(d) { save(d['types']) },
           'assign' => ->(d) { assign(d['id'], d['flipped'] == true) },
           'kind' => lambda { |d|
-            @kind = KIND_LABELS.key?(d['kind']) ? d['kind'] : 'wall'
+            self.kind = d['kind']
             refresh
           },
           'refresh' => ->(_d) { refresh }

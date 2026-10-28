@@ -993,7 +993,7 @@ module BIMSketchAutotest
     def run_ui
       puts "\n[Interfaccia]"
       check('Strumenti attivabili') do
-        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new, BIMSketch::Tools::MoveOpeningTool.new,
+        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new,
                  BIMSketch::Tools::ColumnTool.new, BIMSketch::Tools::BeamTool.new,
                  BIMSketch::Tools::OpeningTool.new('door'), BIMSketch::Tools::OpeningTool.new('window')]
         tools.each { |t| model.select_tool(t) }
@@ -1001,7 +1001,7 @@ module BIMSketchAutotest
         "#{tools.size} strumenti"
       end
       check('File dei dialoghi presenti') do
-        %w[properties levels schedule checker].each do |n|
+        %w[panel schedule checker].each do |n|
           f = File.join(BIMSketch::Dialogs::HTML_DIR, "#{n}.html")
           assert(File.exist?(f), "manca #{f}")
         end
@@ -1024,6 +1024,14 @@ module BIMSketchAutotest
         assert(n[2] < 0, "normale del piano di sezione verso l'alto: #{n.inspect}")
         "scena \"#{page.name}\" creata, sezione attiva a #{format('%.2f', -n[3] / n[2] * 0.0254)} m " \
           '(verifica a occhio, vedi sotto)'
+      end
+      check('In pianta porte e finestre trovano il muro sotto il cursore') do
+        down = Geom::Vector3d.new(0, 0, -1)
+        hit = BIMSketch::Builder.wall_under_ray(model, [pt(2.5, 0.05, 50), down])
+        assert(hit && hit[0] == @e[:wall], "muro trovato: #{hit && BIMSketch::BimData.guid(hit[0])}")
+        miss = BIMSketch::Builder.wall_under_ray(model, [pt(2.5, 2.0, 50), down])
+        assert(miss.nil?, 'muro trovato dove non ce ne sono')
+        approx(hit[1].x.to_m, 2.5, 0.001, 'punto sul muro')
       end
     end
 

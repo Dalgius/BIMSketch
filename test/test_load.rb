@@ -89,10 +89,19 @@ class LoadTest < Minitest::Test
     %w[WallTool BeamTool SlabTool ColumnTool OpeningTool].each do |c|
       assert BIMSketch::Tools.const_defined?(c), c
     end
-    assert BIMSketch::Dialogs::Properties.new
+    assert BIMSketch.panel
     BIMSketch.commands.each_key { |k| assert_kind_of Symbol, k }
-    %w[properties levels schedule checker].each do |n|
-      assert File.exist?(File.join(root, 'bimsketch', 'ui', 'html', "#{n}.html")), n
+    html = File.join(root, 'bimsketch', 'ui', 'html')
+    %w[panel.html schedule.html checker.html common.css common.js panel.js panel_properties.js panel_types.js
+       panel_levels.js].each do |n|
+      assert File.exist?(File.join(html, n)), n
+    end
+    # Ogni callback chiamata dalle pagine del pannello è registrata dal pannello.
+    names = BIMSketch.panel.send(:callbacks).keys
+    Dir[File.join(html, 'panel*.js')].each do |f|
+      File.read(f, encoding: 'UTF-8').scan(/BIM\.call\('([a-z_]+)'(?!\s*\+)/).flatten.uniq.each do |name|
+        assert_includes names, name, "#{File.basename(f)}: #{name}"
+      end
     end
   end
 end

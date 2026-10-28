@@ -14,16 +14,9 @@ module BIMSketch
 
   module_function
 
-  def properties_dialog
-    @properties_dialog ||= Dialogs::Properties.new
-  end
-
-  def levels_dialog
-    @levels_dialog ||= Dialogs::LevelsManager.new
-  end
-
-  def wall_types_dialog
-    @wall_types_dialog ||= Dialogs::WallTypesManager.new
+  # Pannello unico: schede Proprietà, Stratigrafie e Livelli.
+  def panel
+    @panel ||= Dialogs::Panel.new
   end
 
   def schedule_dialog
@@ -78,10 +71,6 @@ module BIMSketch
       window: command('Finestra', 'window', 'Inserisce una finestra in un muro BIMSketch.') {
         select_tool(Tools::OpeningTool.new('window'))
       },
-      move_opening: command('Sposta apertura', 'move_opening',
-                            'Sposta porte e finestre lungo il loro muro (il foro segue).') {
-        select_tool(Tools::MoveOpeningTool.new)
-      },
       from_face: command('Elemento da faccia...', 'face',
                          'Crea solai, coperture, spazi o rivestimenti dalle facce selezionate.') {
         Commands.elements_from_faces
@@ -91,13 +80,13 @@ module BIMSketch
         Commands.classify_selection
       },
       properties: command('Proprietà BIM', 'properties', 'Mostra e modifica le proprietà BIM.') {
-        properties_dialog.show
+        panel.show_tab('properties')
       },
       levels: command('Livelli', 'levels', 'Gestisce i livelli (piani) dell\'edificio.') {
-        levels_dialog.show
+        panel.show_tab('levels')
       },
       wall_types: command('Stratigrafie', 'layers', 'Stratigrafie di muri e solai: strati, materiali, spessori e trasmittanza U.') {
-        wall_types_dialog.show
+        panel.show_tab('types')
       },
       schedule: command('Abaco quantità', 'schedule', 'Abaco delle quantità degli elementi BIM.') {
         schedule_dialog.show
@@ -133,9 +122,9 @@ module BIMSketch
     c = commands
     menu = ::UI.menu('Extensions').add_submenu(EXTENSION_NAME)
     model_menu = menu.add_submenu('Modellazione')
-    %i[wall slab column beam door window move_opening from_face].each { |k| model_menu.add_item(c[k]) }
+    %i[wall slab column beam door window from_face].each { |k| model_menu.add_item(c[k]) }
     menu.add_separator
-    %i[classify properties levels wall_types].each { |k| menu.add_item(c[k]) }
+    %i[properties wall_types levels classify].each { |k| menu.add_item(c[k]) }
     menu.add_separator
     %i[schedule checker ifc csv].each { |k| menu.add_item(c[k]) }
     menu.add_separator
@@ -145,9 +134,9 @@ module BIMSketch
   def setup_toolbar
     c = commands
     tb = ::UI::Toolbar.new(EXTENSION_NAME)
-    %i[wall slab column beam door window move_opening from_face].each { |k| tb.add_item(c[k]) }
+    %i[wall slab column beam door window from_face].each { |k| tb.add_item(c[k]) }
     tb.add_separator
-    %i[classify properties levels wall_types].each { |k| tb.add_item(c[k]) }
+    %i[properties wall_types levels classify].each { |k| tb.add_item(c[k]) }
     tb.add_separator
     %i[schedule checker ifc settings].each { |k| tb.add_item(c[k]) }
     tb.restore
@@ -159,7 +148,7 @@ module BIMSketch
       next if sel.empty?
 
       sub = menu.add_submenu(EXTENSION_NAME)
-      sub.add_item('Proprietà BIM') { properties_dialog.show }
+      sub.add_item('Proprietà BIM') { panel.show_tab('properties') }
       classify = sub.add_submenu('Classifica come')
       ElementTypes.all.each do |t|
         classify.add_item("#{t.label} (#{t.ifc_class})") { Commands.classify_selection(t.key) }

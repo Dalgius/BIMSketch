@@ -104,8 +104,8 @@ module BIMSketch
       end
     end
 
-    # Strumento Scala: clic sul centro del primo gradino, poi nella direzione
-    # di salita. La scala supera l'altezza del livello corrente con alzate e
+    # Strumento Scala: clic sul primo gradino (asse o bordo, vedi
+    # l'allineamento dal tasto destro), poi nella direzione di salita. La scala supera l'altezza del livello corrente con alzate e
     # pedate calcolate (regola di Blondel) e apre il foro nel solaio superiore.
     class StairTool < BaseTool
       def enableVCB?
@@ -126,10 +126,37 @@ module BIMSketch
         view.invalidate
       end
 
+      # Tasto destro: posizione della linea cliccata rispetto alla scala.
+      ALIGN_MENU = { 'center' => 'Linea sull\'asse della scala',
+                     'left' => 'Linea sul bordo destro (scala a sinistra)',
+                     'right' => 'Linea sul bordo sinistro (scala a destra)' }.freeze
+
+      def getMenu(menu, *args)
+        sub = menu.add_submenu('Allineamento scala')
+        ALIGN_MENU.each do |key, label|
+          item = sub.add_item(label) do
+            Settings.set('stair_align', key)
+            update_ui
+            Sketchup.active_model.active_view.invalidate
+          end
+          sub.set_validation_proc(item) { align == key ? MF_CHECKED : MF_UNCHECKED }
+        end
+        super
+      end
+
       protected
 
       def width
         Settings.length('stair_width')
+      end
+
+      def align
+        a = Settings.get('stair_align')
+        ALIGN_MENU.key?(a) ? a : 'center'
+      end
+
+      def where
+        { 'center' => 'sul centro', 'left' => 'sul bordo destro', 'right' => 'sul bordo sinistro' }[align]
       end
 
       def calc
@@ -141,7 +168,8 @@ module BIMSketch
         info = format('%d alzate da %.1f cm, pedata %.1f cm, lunghezza %.2f m', c[:risers], c[:riser] * 100,
                       c[:tread] * 100, c[:run]).tr('.', ',')
         Sketchup.status_text = if @points.empty?
-                                 "Scala (#{info}): clic sul centro del primo gradino. #{level_label}."
+                                 "Scala (#{info}): clic #{where} del primo gradino. #{level_label}. " \
+                                   'Tasto destro: allineamento.'
                                else
                                  "Scala (#{info}): clic nella direzione di salita. Esc per annullare."
                                end
@@ -156,7 +184,8 @@ module BIMSketch
         return if dir.length < Geometry::TOL
 
         x = dir.normalize
-        origin = start.offset(Z_AXIS * x, -width / 2.0)
+        lo, = WallJoint.band(align, width.to_f)
+        origin = lo.zero? ? start : start.offset(Z_AXIS * x, lo)
         @preview = box_loops(Geometry.frame_transform(origin, x), calc[:run].m, width, Levels.current_height(model))
       end
 
@@ -164,7 +193,7 @@ module BIMSketch
         start = @points.first
         result = run_operation('BIMSketch: Scala') do
           Builder.stair(model, start, pt, width, Levels.current_height(model),
-                        max_riser: Settings.length('stair_riser'))
+                        max_riser: Settings.length('stair_riser'), align: align)
         end
         reset_tool
         return unless result

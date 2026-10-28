@@ -742,6 +742,15 @@ module BIMSketchAutotest
          approx(volume_m3(s), vol - c[:run] * 1.0 * 0.25, 0.002, 'volume solaio con il vano scala'),
          "#{c[:risers]} alzate da #{format('%.1f', c[:riser] * 100)} cm"].join(', ')
       end
+      check('Scala in asse, a sinistra e a destra della linea') do
+        model.start_operation('Autotest allineamento scala', true)
+        ys = { 'center' => [219.5, 220.5], 'left' => [220.0, 221.0], 'right' => [219.0, 220.0] }.map do |al, (y0, y1)|
+          st = b.stair(model, pt(20, 220, 0), pt(25, 220, 0), 1.0.m, h0.m, cut_slab: false, align: al)[:stair]
+          approx(st.bounds.min.y.to_m, y0, 0.001, "#{al}: bordo") + ' / ' + approx(st.bounds.max.y.to_m, y1, 0.001, 'bordo')
+        end
+        model.commit_operation
+        ys.join(', ')
+      end
       check('Fori tolti dal solaio') do
         s = @e[:room_slab]
         model.start_operation('Autotest togli fori', true)

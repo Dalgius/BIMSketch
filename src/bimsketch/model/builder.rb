@@ -714,19 +714,24 @@ module BIMSketch
       slab.set_attribute(BimData::DICT, 'object_type', type['name'])
     end
 
-    # Scala a rampa rettilinea dal punto start (centro del primo gradino, alla
-    # quota di partenza) verso toward, che supera il dislivello height (vedi
-    # StairCalc). Con cut_slab apre il foro nel solaio che ha l'estradosso
-    # alla quota di arrivo. Restituisce { stair:, hole: :ok | :none | :outside
-    # | :overlap | :modified }.
-    def stair(model, start, toward, width, height, max_riser: 175.mm, waist: 180.mm, cut_slab: true)
+    # Scala a rampa rettilinea dal punto start (sul primo gradino, alla quota
+    # di partenza) verso toward, che supera il dislivello height (vedi
+    # StairCalc). align dice dove sta la linea start-toward, come per i muri:
+    # 'center' sull'asse, 'left' scala a sinistra della linea (la linea è il
+    # bordo destro), 'right' scala a destra. Con cut_slab apre il foro nel
+    # solaio che ha l'estradosso alla quota di arrivo. Restituisce { stair:,
+    # hole: :ok | :none | :outside | :overlap | :modified }.
+    def stair(model, start, toward, width, height, max_riser: 175.mm, waist: 180.mm, cut_slab: true,
+              align: 'center')
       dir = toward - start
       dir.z = 0
       return nil if dir.length < Geometry::TOL
 
       calc = StairCalc.compute(height.to_m, max_riser: max_riser.to_m)
       x = dir.normalize
-      origin = Geom::Point3d.new(start.x, start.y, start.z).offset(Z_AXIS * x, -width / 2.0)
+      lo, = WallJoint.band(align, width.to_f)
+      origin = Geom::Point3d.new(start.x, start.y, start.z)
+      origin = origin.offset(Z_AXIS * x, lo) unless lo.zero?
       tr = Geometry.frame_transform(origin, x)
       pts = StairCalc.profile(calc, waist: waist.to_m).map { |px, pz| [px.m, pz.m] }
       group = Geometry.create_group(model, tr) { |ents| Geometry.extrude_xz(ents, pts, width) }

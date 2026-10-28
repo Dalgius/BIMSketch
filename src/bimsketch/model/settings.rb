@@ -10,6 +10,7 @@ module BIMSketch
       'slab_thickness' => 250, 'slab_type' => '',
       'column_width' => 300, 'column_depth' => 300,
       'beam_width' => 300, 'beam_height' => 500, 'stair_width' => 1000, 'stair_riser' => 175,
+      'stair_align' => 'center',
       'door_type' => 'D1', 'window_type' => 'W2',
       'door_width' => 900, 'door_height' => 2100,
       'window_width' => 1200, 'window_height' => 1400, 'window_sill' => 900
@@ -82,13 +83,14 @@ module BIMSketch
       doors = OpeningTypes.all('door')
       windows = OpeningTypes.all('window')
       prompts = ['Muro: tipologia (stratigrafia)', 'Muro: allineamento', 'Solaio: tipologia (stratigrafia)',
-                 'Porta: tipologia', 'Finestra: tipologia'] + fields.map(&:last)
+                 'Porta: tipologia', 'Finestra: tipologia', 'Scala: allineamento'] + fields.map(&:last)
       defaults = [current ? current['name'] : none, ALIGN_LABELS[get('wall_align')] || 'Asse',
                   current_slab ? current_slab['name'] : none, opening_type('door')['name'],
-                  opening_type('window')['name']] + fields.map { |k, _| get(k).to_s }
+                  opening_type('window')['name'], ALIGN_LABELS[get('stair_align')] || 'Asse'] +
+                 fields.map { |k, _| get(k).to_s }
       lists = [([none] + types.map { |t| t['name'] }).join('|'), ALIGN_LABELS.values.join('|'),
                ([none] + slab_types.map { |t| t['name'] }).join('|'), doors.map { |t| t['name'] }.join('|'),
-               windows.map { |t| t['name'] }.join('|')] + Array.new(fields.size, '')
+               windows.map { |t| t['name'] }.join('|'), ALIGN_LABELS.values.join('|')] + Array.new(fields.size, '')
       result = UI.inputbox(prompts, defaults, lists, 'BIMSketch - Impostazioni elementi')
       return false unless result
 
@@ -99,6 +101,7 @@ module BIMSketch
       set('slab_type', chosen_slab ? chosen_slab['id'] : '')
       chosen_openings = { 'door' => doors.find { |t| t['name'] == result.shift },
                           'window' => windows.find { |t| t['name'] == result.shift } }
+      set('stair_align', ALIGN_LABELS.key(result.shift) || 'center')
       before = fields.map { |k, _| get(k).to_s }
       fields.each_with_index do |(key, _), i|
         v = result[i].to_s.tr(',', '.').to_f

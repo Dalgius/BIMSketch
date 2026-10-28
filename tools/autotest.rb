@@ -688,6 +688,19 @@ module BIMSketchAutotest
          approx(volume_m3(s), 8.3 * 6.3 * 0.25, 0.002, 'volume'),
          approx(height_m(walls.first), h0 - 0.25, 0.001, 'muri sotto il solaio')].join(', ')
       end
+      check('Solaio alla base dei muri; doppione rifiutato') do
+        walls = @e[:room_walls]
+        model.start_operation('Autotest solaio alla base', true)
+        dup = b.slab_from_walls(model, walls, 0.25.m)
+        res = b.slab_from_walls(model, walls, 0.25.m, at: :base)
+        model.commit_operation
+        assert(dup[:error], 'creato un secondo solaio identico in testa ai muri')
+        assert(res[:slab], "errore: #{res[:error]}")
+        s = res[:slab]
+        assert(BIMSketch::BimData.level_id(s) == 'L0', "livello: #{BIMSketch::BimData.level_id(s)}")
+        [approx(s.bounds.max.z.to_m, 0.0, 0.001, 'estradosso alla base'),
+         approx(height_m(walls.first), h0 - 0.25, 0.001, 'muri invariati')].join(', ')
+      end
       check('Perimetro aperto rifiutato') do
         model.start_operation('Autotest perimetro aperto', true)
         res = b.slab_from_walls(model, @e[:room_walls].first(3), 0.25.m)

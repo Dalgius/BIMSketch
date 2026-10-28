@@ -624,10 +624,11 @@ module BIMSketch
     end
 
     # Solaio dal perimetro chiuso dei muri selezionati: contorno sulla faccia
-    # esterna dei muri, estradosso in testa ai muri (quota del livello
-    # superiore). Con stop_walls i muri con altezza automatica si fermano
-    # sotto il solaio. Restituisce { slab:, failed: } oppure { error: messaggio }.
-    def slab_from_walls(model, walls, thickness, type_id: nil, stop_walls: true)
+    # esterna dei muri, estradosso in testa ai muri (at: :top, quota del
+    # livello superiore) o alla loro base (at: :base, quota del livello dei
+    # muri). Con stop_walls (solo in testa) i muri con altezza automatica si
+    # fermano sotto il solaio. Restituisce { slab:, failed: } oppure { error: messaggio }.
+    def slab_from_walls(model, walls, thickness, type_id: nil, stop_walls: true, at: :top)
       params = walls.map { |w| wall_params(model, w) }
       return { error: 'Seleziona i muri BIMSketch del perimetro.' } if params.empty? || params.any?(&:nil?)
 
@@ -647,15 +648,19 @@ module BIMSketch
       end
 
       lvl = Levels.find(model, BimData.level_id(walls.first)) || Levels.for_entity(model, walls.first)
-      top = lvl['elevation'] + lvl['height']
-      upper = LevelList.for_z(Levels.all(model), top)
+      top = at == :base ? lvl['elevation'] : lvl['elevation'] + lvl['height']
+      upper = at == :base ? lvl : LevelList.for_z(Levels.all(model), top)
       top_z = top.m
       type = WallTypeLibrary.find(model, type_id, kind: 'slab')
       t = type ? WallTypes.thickness(type).m : thickness
       pts = poly.map { |x, y| Geom::Point3d.new(x, y, top_z) }
+      if duplicate_slab?(model, pts, top_z)
+        return { error: 'Esiste già un solaio su questo perimetro alla stessa quota.' }
+      end
+
       group = slab(model, pts, t, top_z, type_id: type && type['id'], level: upper['id'])
       failed = 0
-      if stop_walls
+      if stop_walls && at == :top
         walls.each do |w|
           info = element_height(model, w)
           next unless info && info[:auto]
@@ -664,6 +669,22 @@ module BIMSketch
         end
       end
       { slab: group, failed: failed }
+    end
+
+    # Esiste già un solaio con lo stesso ingombro in pianta e l'estradosso
+    # alla quota top_z (punti mondo del contorno)?
+    def duplicate_slab?(model, pts, top_z)
+      ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
+      xs = pts.map(&:x)
+      ys = pts.map(&:y)
+      model.active_entities.any? do |e|
+        next false unless BimData.element?(e) && Builder::SLAB_TYPES.include?(BimData.type_key(e))
+
+        bb = Geom::BoundingBox.new
+        (0..7).each { |i| bb.add(e.bounds.corner(i).transform(ctx)) }
+        (bb.max.z - top_z).abs < 1.mm && (bb.min.x - xs.min).abs < 1.mm && (bb.max.x - xs.max).abs < 1.mm &&
+          (bb.min.y - ys.min).abs < 1.mm && (bb.max.y - ys.max).abs < 1.mm
+      end
     end
 
     # Aggiorna i solai del contesto attivo che usano la tipologia.

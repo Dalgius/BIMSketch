@@ -458,7 +458,7 @@ module BIMSketch
     # Solaio da un poligono (punti mondo); la faccia superiore sta alla quota
     # top_z. type_id: tipologia di solaio con stratigrafia (lo spessore
     # diventa quello della tipologia).
-    def slab(model, points, thickness, top_z, holes: [], type_key: 'slab', type_id: nil)
+    def slab(model, points, thickness, top_z, holes: [], type_key: 'slab', type_id: nil, level: nil)
       type = WallTypeLibrary.find(model, type_id, kind: 'slab')
       thickness = WallTypes.thickness(type).m if type
       return nil if points.size < 3
@@ -474,7 +474,7 @@ module BIMSketch
       group = Geometry.create_group(model, tr) do |ents|
         Geometry.build_slab(ents, outline, local_holes, 0.0, thickness, layers: layers)
       end
-      finish(model, group, type_key)
+      finish(model, group, type_key, {}, level: level)
       store_slab_geom(group, outline: outline, holes: local_holes, base: 0.0, thickness: thickness.to_f,
                              type_id: type && type['id'])
       apply_slab_type_data(model, group, type) if type
@@ -556,6 +556,148 @@ module BIMSketch
       true
     end
 
+    # Fori del solaio (scale, cavedi): poligoni nel sistema locale.
+    # Aggiunge il foro (punti mondo, proiettati in pianta) e ricostruisce il
+    # solaio con tutti i suoi strati. Restituisce :ok, :modified (solaio
+    # modificato a mano), :outside (il foro esce dal solaio o tocca il bordo)
+    # o :overlap (si sovrappone a un altro foro).
+    # replace: foro esistente (poligono locale) da sostituire con il nuovo.
+    def add_slab_hole(model, slab, points, replace: nil)
+      g = slab_geom(slab)
+      return :modified unless g && slab_intact?(slab, g)
+
+      hole = slab_local_polygon(model, slab, points)
+      holes = replace ? g[:holes].reject { |h| same_polygon?(h, replace) } : g[:holes]
+      return :outside unless Polygon.inside?(hole, g[:outline])
+      return :overlap if holes.any? { |h| Polygon.overlap?(h, hole) }
+
+      rebuild_slab(model, slab, g.merge(holes: holes + [hole]))
+      :ok
+    end
+
+    # Punti mondo proiettati nel sistema locale del solaio (antiorari).
+    def slab_local_polygon(model, slab, points)
+      inv = slab.transformation.inverse
+      poly = points.map do |p|
+        q = Geometry.to_active(model, p).transform(inv)
+        [q.x.to_f, q.y.to_f]
+      end
+      Polygon.signed_area(poly).negative? ? poly.reverse : poly
+    end
+
+    def same_polygon?(p, q)
+      p.size == q.size && p.zip(q).all? { |a, b| (a[0] - b[0]).abs < 0.5.mm && (a[1] - b[1]).abs < 0.5.mm }
+    end
+
+    # Toglie tutti i fori del solaio. false se è stato modificato a mano.
+    def clear_slab_holes(model, slab)
+      g = slab_geom(slab)
+      return false unless g && slab_intact?(slab, g)
+
+      rebuild_slab(model, slab, g.merge(holes: [])) unless g[:holes].empty?
+      true
+    end
+
+    # Ricostruisce il solaio dai suoi parametri locali (stessa tipologia).
+    def rebuild_slab(model, slab, g)
+      type = WallTypeLibrary.find(model, g[:type_id], kind: 'slab')
+      slab.make_unique if slab.respond_to?(:make_unique)
+      ents = slab.definition.entities
+      ents.clear!
+      layers = type ? WallTypeLibrary.slab_layers(model, type, g[:thickness]) : nil
+      Geometry.build_slab(ents, g[:outline], g[:holes], g[:base], g[:thickness], layers: layers)
+      store_slab_geom(slab, g)
+    end
+
+    # Solaio o copertura sotto la linea di vista ray (coordinate mondo): il
+    # primo, dall'osservatore, la cui faccia superiore contiene il punto in
+    # cui la linea la attraversa. [solaio, punto sulla faccia superiore] o nil.
+    def slab_under_ray(model, ray)
+      best = nil
+      ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
+      model.active_entities.each do |e|
+        next unless parametric_slab?(e) && !e.hidden? && (e.layer.nil? || e.layer.visible?)
+
+        g = slab_geom(e)
+        world = ctx * e.transformation
+        top = Geom::Point3d.new(0, 0, g[:base] + g[:thickness]).transform(world)
+        pt = Geom.intersect_line_plane(ray, [top, Z_AXIS.transform(world)])
+        next unless pt
+
+        q = pt.transform(world.inverse)
+        local = [q.x.to_f, q.y.to_f]
+        next unless Polygon.contains?(g[:outline], local) && g[:holes].none? { |h| Polygon.contains?(h, local) }
+
+        dist = ray[0].distance(pt)
+        best = [dist, e, pt] if best.nil? || dist < best[0]
+      end
+      best && best[1..2]
+    end
+
+    # Solaio dal perimetro chiuso dei muri selezionati: contorno sulla faccia
+    # esterna dei muri, estradosso in testa ai muri (at: :top, quota del
+    # livello superiore) o alla loro base (at: :base, quota del livello dei
+    # muri). Con stop_walls (solo in testa) i muri con altezza automatica si
+    # fermano sotto il solaio. Restituisce { slab:, failed: } oppure { error: messaggio }.
+    def slab_from_walls(model, walls, thickness, type_id: nil, stop_walls: true, at: :top)
+      params = walls.map { |w| wall_params(model, w) }
+      return { error: 'Seleziona i muri BIMSketch del perimetro.' } if params.empty? || params.any?(&:nil?)
+
+      base = params.first[:p1].z
+      if params.any? { |pr| (pr[:p1].z - base).abs > 1.mm }
+        return { error: 'I muri selezionati non partono tutti dalla stessa quota.' }
+      end
+
+      data = params.map do |pr|
+        { a: [pr[:p1].x.to_f, pr[:p1].y.to_f], b: [pr[:p2].x.to_f, pr[:p2].y.to_f],
+          band: WallJoint.band(pr[:align], pr[:thickness].to_f) }
+      end
+      poly = WallLoop.outline(data, side: :outer, tol: 1.mm)
+      unless poly
+        return { error: 'I muri selezionati non formano un perimetro chiuso: seleziona solo i muri del ' \
+                        'perimetro, raccordati agli angoli uno dopo l\'altro.' }
+      end
+
+      lvl = Levels.find(model, BimData.level_id(walls.first)) || Levels.for_entity(model, walls.first)
+      top = at == :base ? lvl['elevation'] : lvl['elevation'] + lvl['height']
+      upper = at == :base ? lvl : LevelList.for_z(Levels.all(model), top)
+      top_z = top.m
+      type = WallTypeLibrary.find(model, type_id, kind: 'slab')
+      t = type ? WallTypes.thickness(type).m : thickness
+      pts = poly.map { |x, y| Geom::Point3d.new(x, y, top_z) }
+      if duplicate_slab?(model, pts, top_z)
+        return { error: 'Esiste già un solaio su questo perimetro alla stessa quota.' }
+      end
+
+      group = slab(model, pts, t, top_z, type_id: type && type['id'], level: upper['id'])
+      failed = 0
+      if stop_walls && at == :top
+        walls.each do |w|
+          info = element_height(model, w)
+          next unless info && info[:auto]
+
+          failed += 1 unless set_height(model, w, auto: true, top_offset: t)
+        end
+      end
+      { slab: group, failed: failed }
+    end
+
+    # Esiste già un solaio con lo stesso ingombro in pianta e l'estradosso
+    # alla quota top_z (punti mondo del contorno)?
+    def duplicate_slab?(model, pts, top_z)
+      ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
+      xs = pts.map(&:x)
+      ys = pts.map(&:y)
+      model.active_entities.any? do |e|
+        next false unless BimData.element?(e) && Builder::SLAB_TYPES.include?(BimData.type_key(e))
+
+        bb = Geom::BoundingBox.new
+        (0..7).each { |i| bb.add(e.bounds.corner(i).transform(ctx)) }
+        (bb.max.z - top_z).abs < 1.mm && (bb.min.x - xs.min).abs < 1.mm && (bb.max.x - xs.max).abs < 1.mm &&
+          (bb.min.y - ys.min).abs < 1.mm && (bb.max.y - ys.max).abs < 1.mm
+      end
+    end
+
     # Aggiorna i solai del contesto attivo che usano la tipologia.
     # Restituisce il numero di solai non adattati.
     def update_type_slabs(model, type_id, remove: false)
@@ -581,6 +723,137 @@ module BIMSketch
       props['ThermalTransmittance'] = u.round(4) if u
       slab.set_attribute(BimData::DICT, 'props', JSON.generate(props))
       slab.set_attribute(BimData::DICT, 'object_type', type['name'])
+    end
+
+    # Scala a rampa rettilinea dal punto start (sul primo gradino, alla quota
+    # di partenza) verso toward, che supera il dislivello height (vedi
+    # StairCalc). align dice dove sta la linea start-toward, come per i muri:
+    # 'center' sull'asse, 'left' scala a sinistra della linea (la linea è il
+    # bordo destro), 'right' scala a destra. Con cut_slab apre il foro nel
+    # solaio che ha l'estradosso alla quota di arrivo. Restituisce { stair:,
+    # hole: :ok | :none | :outside | :overlap | :modified }.
+    def stair(model, start, toward, width, height, max_riser: 175.mm, waist: 180.mm, cut_slab: true,
+              align: 'center')
+      dir = toward - start
+      dir.z = 0
+      return nil if dir.length < Geometry::TOL
+
+      calc = StairCalc.compute(height.to_m, max_riser: max_riser.to_m)
+      x = dir.normalize
+      lo, = WallJoint.band(align, width.to_f)
+      origin = Geom::Point3d.new(start.x, start.y, start.z)
+      origin = origin.offset(Z_AXIS * x, lo) unless lo.zero?
+      tr = Geometry.frame_transform(origin, x)
+      data = stair_record(calc, width.to_m, waist.to_m, align)
+      group = Geometry.create_group(model, tr) { |ents| build_stair(ents, data) }
+      finish(model, group, 'stair')
+      store_stair(group, data)
+      hole = cut_slab ? stair_hole(model, group) : :none
+      { stair: group, hole: hole }
+    end
+
+    def stair_record(calc, width, waist, align)
+      calc.transform_keys(&:to_s).merge('width' => width, 'waist' => waist, 'align' => align)
+    end
+
+    def build_stair(ents, data)
+      calc = data.transform_keys(&:to_sym)
+      pts = StairCalc.profile(calc, waist: data['waist']).map { |px, pz| [px.m, pz.m] }
+      Geometry.extrude_xz(ents, pts, data['width'].m)
+    end
+
+    # Dati della scala (metri): risers, riser, tread, treads, run, height,
+    # width, waist, align e, se ha aperto un vano, hole { slab:, polygon: }.
+    def stair_data(stair)
+      return nil unless BimData.element?(stair) && BimData.type_key(stair) == 'stair'
+
+      raw = stair.get_attribute(BimData::DICT, 'stair_geom')
+      d = raw && JSON.parse(raw)
+      return nil unless d && d['risers']
+
+      { 'waist' => 0.18, 'align' => 'center' }.merge(d)
+    rescue JSON::ParserError
+      nil
+    end
+
+    # Salva i dati della scala e ne aggiorna Pset e tipologia (ObjectType).
+    def store_stair(stair, data)
+      stair.set_attribute(BimData::DICT, 'stair_geom', JSON.generate(data))
+      props = BimData.json_attr(stair, 'props').merge(
+        'NumberOfRiser' => data['risers'], 'NumberOfTreads' => data['treads'],
+        'RiserHeight' => data['riser'].round(4), 'TreadLength' => data['tread'].round(4)
+      )
+      stair.set_attribute(BimData::DICT, 'props', JSON.generate(props))
+      stair.set_attribute(BimData::DICT, 'object_type',
+                          format('Scala rettilinea, %d alzate da %.1f cm, pedata %.1f cm', data['risers'],
+                                 data['riser'] * 100, data['tread'] * 100).tr('.', ','))
+    end
+
+    # Impronta della rampa in pianta (punti mondo alla quota z).
+    def stair_footprint(model, stair, data, z)
+      ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
+      world = ctx * stair.transformation
+      run = data['run'].m
+      w = data['width'].m
+      [[0, 0], [run, 0], [run, w], [0, w]].map do |x, y|
+        p = Geom::Point3d.new(x, y, 0).transform(world)
+        Geom::Point3d.new(p.x, p.y, z)
+      end
+    end
+
+    # Foro, grande quanto l'impronta della rampa, nel solaio con l'estradosso
+    # alla quota di arrivo; il vano viene registrato nella scala per poterlo
+    # adeguare quando la scala cambia. replace: vano precedente.
+    def stair_hole(model, stair, replace: nil)
+      data = stair_data(stair)
+      ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
+      top_z = Geom::Point3d.new(0, 0, 0).transform(ctx * stair.transformation).z + data['height'].m
+      corners = stair_footprint(model, stair, data, top_z)
+      slab = replace && model.active_entities.find { |e| parametric_slab?(e) && BimData.guid(e) == replace['slab'] }
+      unless slab
+        center = Geom::Point3d.new(corners.sum(&:x) / 4.0, corners.sum(&:y) / 4.0, top_z + 1.m)
+        hit = slab_under_ray(model, [center, Geom::Vector3d.new(0, 0, -1)])
+        return :none unless hit && (hit[1].z - top_z).abs < 1.mm
+
+        slab = hit[0]
+      end
+      result = add_slab_hole(model, slab, corners, replace: replace && replace['polygon'])
+      if result == :ok
+        data['hole'] = { 'slab' => BimData.guid(slab), 'polygon' => slab_local_polygon(model, slab, corners) }
+        stair.set_attribute(BimData::DICT, 'stair_geom', JSON.generate(data))
+      end
+      result
+    end
+
+    # Cambia alzate (numero), pedata e larghezza (m) di una scala e la
+    # ricostruisce sul posto: la linea di partenza e l'allineamento restano,
+    # il vano nel solaio segue. Restituisce :ok, :invalid (valori fuori dai
+    # limiti) oppure lo stato del vano non adeguato (:outside, :overlap, :modified).
+    def update_stair(model, stair, risers: nil, tread: nil, width: nil)
+      d = stair_data(stair)
+      return :invalid unless d
+
+      n = (risers || d['risers']).to_i
+      p = (tread || d['tread']).to_f
+      w = (width || d['width']).to_f
+      return :invalid unless n >= 2 && n <= 60 && p.between?(0.15, 0.45) && w >= 0.4 && w <= 5.0
+
+      data = stair_record(StairCalc.fixed(d['height'].to_f, n, p), w, d['waist'], d['align'])
+      tr = stair.transformation
+      x = X_AXIS.transform(tr).normalize
+      lo_old, = WallJoint.band(d['align'], d['width'].to_f.m)
+      lo_new, = WallJoint.band(d['align'], w.m)
+      origin = Geom::Point3d.new(0, 0, 0).transform(tr)
+      origin = origin.offset(Z_AXIS * x, lo_new - lo_old) unless (lo_new - lo_old).abs < Geometry::TOL
+      stair.make_unique if stair.respond_to?(:make_unique)
+      stair.definition.entities.clear!
+      build_stair(stair.definition.entities, data)
+      stair.transformation = Geometry.frame_transform(origin, x)
+      data['hole'] = d['hole'] if d['hole']
+      store_stair(stair, data)
+      return :ok unless d['hole']
+
+      stair_hole(model, stair, replace: d['hole']).then { |r| r == :none ? :ok : r }
     end
 
     # Pilastro rettangolare centrato in center (base alla quota di center).
@@ -624,16 +897,29 @@ module BIMSketch
       end
     end
 
+    # Riduzione in testa di muri e pilastri (unità interne): con l'altezza
+    # automatica l'elemento si ferma sotto il solaio del piano superiore.
+    def top_offset(entity)
+      entity.get_attribute(BimData::DICT, 'top_offset').to_f
+    end
+
+    # Altezza automatica dell'elemento: altezza del livello meno la riduzione in testa.
+    def auto_height(model, entity, lvl = nil)
+      lvl ||= Levels.find(model, BimData.level_id(entity)) || Levels.for_entity(model, entity)
+      lvl['height'].m - top_offset(entity)
+    end
+
     # Imposta l'altezza di un muro o pilastro parametrico. Con auto: true
-    # l'altezza diventa (e resta) quella del livello dell'elemento.
-    # Restituisce false se l'elemento non può essere ricostruito.
-    def set_height(model, entity, height: nil, auto: false)
+    # l'altezza diventa (e resta) quella del livello dell'elemento, meno
+    # l'eventuale riduzione in testa (top_offset, ad es. lo spessore del
+    # solaio superiore). Restituisce false se l'elemento non può essere ricostruito.
+    def set_height(model, entity, height: nil, auto: false, top_offset: nil)
       info = element_height(model, entity)
       return false unless info
 
       if auto
-        lvl = Levels.find(model, BimData.level_id(entity)) || Levels.for_entity(model, entity)
-        height = lvl['height'].m
+        entity.set_attribute(BimData::DICT, 'top_offset', top_offset.to_f) unless top_offset.nil?
+        height = auto_height(model, entity)
       end
       return false unless height && height.to_f >= 0.1.m
 

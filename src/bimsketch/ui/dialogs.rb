@@ -292,7 +292,15 @@ module BIMSketch
             Commands.declassify_selection
             refresh
           },
-          'refresh' => ->(_d) { refresh }
+          'refresh' => ->(_d) { refresh },
+          'clear_holes' => lambda { |_d|
+            slabs = model.selection.select { |e| Builder.parametric_slab?(e) }
+            model.start_operation('BIMSketch: Togli fori', true)
+            failed = slabs.count { |e| !Builder.clear_slab_holes(model, e) }
+            model.commit_operation
+            ::UI.messagebox("#{failed} solai modificati a mano non sono stati ricostruiti.") if failed.positive?
+            refresh
+          }
         }
       end
 
@@ -307,7 +315,10 @@ module BIMSketch
         end
         data['solid'] = rec[:solid]
         info = Builder.element_height(model, entity)
-        data['dims'] = { 'height' => info[:height].to_m.round(4), 'auto' => info[:auto] } if info
+        if info
+          data['dims'] = { 'height' => info[:height].to_m.round(4), 'auto' => info[:auto],
+                           'top_offset' => Builder.top_offset(entity).to_m.round(4) }
+        end
         if Builder.parametric_wall?(entity)
           g = Builder.wall_geom(entity)
           type = Builder.wall_type(model, entity)
@@ -330,7 +341,7 @@ module BIMSketch
             'layers' => type ? type['layers'] : [],
             'u' => type && WallTypes.u_value(type, external: external,
                                                    flow: WallTypes.flow_for(BimData.type_key(entity))),
-            'thickness' => (g[:thickness] * sz).to_m * 100
+            'thickness' => (g[:thickness] * sz).to_m * 100, 'holes' => g[:holes].size
           }
         end
         if %w[door window].include?(BimData.type_key(entity)) && Builder.host_wall(model, entity)
@@ -343,6 +354,12 @@ module BIMSketch
             data['opening']['left'] = pos[:left].to_m.round(4)
             data['opening']['sill'] = pos[:sill].to_m.round(4) if BimData.type_key(entity) == 'window'
           end
+        end
+        st = Builder.stair_data(entity)
+        if st
+          data['stair'] = { 'risers' => st['risers'], 'riser' => st['riser'], 'tread' => st['tread'],
+                            'width' => st['width'], 'height' => st['height'], 'run' => st['run'],
+                            'hole' => !st['hole'].nil? }
         end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
@@ -364,8 +381,7 @@ module BIMSketch
           nil
         end
         if auto
-          lvl = Levels.find(model, BimData.level_id(entity)) || Levels.for_entity(model, entity)
-          return true if info[:auto] && (info[:height] - lvl['height'].m).abs < 0.5.mm
+          return true if info[:auto] && (info[:height] - Builder.auto_height(model, entity)).abs < 0.5.mm
 
           return Builder.set_height(model, entity, auto: true)
         end
@@ -407,6 +423,27 @@ module BIMSketch
         Float(value.to_s.strip.tr(',', '.')).m
       rescue ArgumentError, TypeError
         nil
+      end
+
+      # Geometria della scala (campi 'stair_risers', 'stair_tread' e
+      # 'stair_width' in cm, inviati solo se modificati).
+      def apply_stair(entity, el)
+        return true unless Builder.stair_data(entity)
+
+        risers = el['stair_risers'].to_s.strip.empty? ? nil : el['stair_risers'].to_i
+        tread = parse_m(el['stair_tread'])
+        width = parse_m(el['stair_width'])
+        return true unless risers || tread || width
+
+        result = Builder.update_stair(model, entity, risers: risers, tread: tread && tread.to_m / 100.0,
+                                                     width: width && width.to_m / 100.0)
+        @stair_message = {
+          invalid: 'Valori della scala non validi: almeno 2 alzate, pedata tra 15 e 45 cm, larghezza tra 40 e 500 cm.',
+          outside: 'Scala aggiornata, ma il vano nel solaio non è stato adeguato: uscirebbe dal solaio.',
+          overlap: 'Scala aggiornata, ma il vano nel solaio non è stato adeguato: si sovrapporrebbe a un altro foro.',
+          modified: 'Scala aggiornata, ma il solaio è stato modificato a mano: il vano non è stato adeguato.'
+        }[result]
+        result != :invalid
       end
 
       # Tipologia di porta o finestra (campo 'opening_type_id').
@@ -475,6 +512,7 @@ module BIMSketch
         elements = model.selection.select { |e| BimData.element?(e) }
         return if elements.empty?
 
+        @stair_message = nil
         failed = 0
         model.start_operation('BIMSketch: Proprietà', true)
         if data['mode'] == 'single'
@@ -488,6 +526,7 @@ module BIMSketch
           failed += 1 unless apply_slab_type(elements.first, data['element'] || {})
           failed += 1 unless apply_opening_type(elements.first, data['element'] || {})
           failed += 1 unless apply_opening_position(elements.first, data['element'] || {})
+          failed += 1 unless apply_stair(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
@@ -508,6 +547,11 @@ module BIMSketch
         model.commit_operation
         refresh
         push('saved', true)
+        if @stair_message
+          ::UI.messagebox(@stair_message)
+          @stair_message = nil
+          return
+        end
         if failed.positive?
           ::UI.messagebox("#{failed} modifiche di altezza o tipologia non applicate: gli elementi sono stati " \
                           'modificati a mano oppure le aperture non entrerebbero nel muro.')
@@ -578,6 +622,7 @@ module BIMSketch
           'isolate' => ->(d) { Levels.isolate(model, d['id']) },
           'show_all' => ->(_d) { Levels.isolate(model, nil) },
           'plan_view' => ->(d) { Levels.create_plan_view(model, d['id']) },
+          'view_3d' => ->(_d) { Levels.view_3d(model) },
           'assign' => lambda { |d|
             n = Commands.assign_selection_to_level(d['id'])
             ::UI.messagebox('Seleziona prima uno o più elementi BIM.') if n.to_i.zero?

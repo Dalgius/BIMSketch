@@ -85,6 +85,48 @@ module BIMSketch
       'Spazio (locale)' => ['space', :up, nil]
     }.freeze
 
+    # Solaio dal perimetro dei muri selezionati (filo esterno), in testa ai
+    # muri (i muri con altezza automatica possono fermarsi sotto) o alla base.
+    def slab_from_walls
+      walls = model.selection.select { |e| Builder.parametric_wall?(e) }
+      if walls.size < 3
+        UI.messagebox('Seleziona i muri BIMSketch del perimetro (almeno tre, raccordati agli angoli).')
+        return
+      end
+      none = '(nessuna: spessore libero)'
+      types = WallTypeLibrary.all(model, kind: 'slab')
+      current = Settings.slab_type(model)
+      top = 'In testa ai muri'
+      base = 'Alla base dei muri'
+      input = UI.inputbox(['Posizione', 'Tipologia del solaio', 'Spessore senza tipologia (mm)',
+                           'Muri sotto il solaio (solo in testa)'],
+                          [top, current ? current['name'] : none, Settings.get('slab_thickness').to_s, YES],
+                          ["#{top}|#{base}", ([none] + types.map { |t| t['name'] }).join('|'), '', "#{YES}|#{NO}"],
+                          'BIMSketch - Solaio dai muri')
+      return unless input
+
+      at = input[0] == base ? :base : :top
+      type = types.find { |t| t['name'] == input[1] }
+      thickness = input[2].to_s.tr(',', '.').to_f
+      thickness = Settings.get('slab_thickness').to_f if thickness <= 0
+      result = operation('BIMSketch: Solaio dai muri') do
+        Builder.slab_from_walls(model, walls, thickness.mm, type_id: type && type['id'], stop_walls: input[3] == YES,
+                                                              at: at)
+      end
+      return unless result
+
+      if result[:error]
+        UI.messagebox(result[:error])
+        return
+      end
+      model.selection.clear
+      model.selection.add(result[:slab])
+      return unless result[:failed].positive?
+
+      UI.messagebox("#{result[:failed]} muri non sono stati abbassati sotto il solaio: sono stati modificati a mano " \
+                    'oppure le loro aperture non entrerebbero.')
+    end
+
     def elements_from_faces
       faces = model.selection.grep(Sketchup::Face)
       if faces.empty?

@@ -48,9 +48,12 @@
           button('delete', 'Elimina', 'Elimina il livello', 'ghost danger') +
           '</div></div>';
       });
-      html += '<div class="toolbar"><button class="small" id="l_showAll">Mostra tutti i livelli</button></div>';
+      html += '<div class="toolbar"><button class="small plan" id="l_view3d" title="Toglie la sezione e torna alla vista ' +
+        'assonometrica (scena Vista 3D)">' + BIM.icon('cube') + 'Vista 3D</button>' +
+        '<button class="small" id="l_showAll">Mostra tutti i livelli</button></div>';
       $('l_list').innerHTML = html;
       $('l_showAll').addEventListener('click', function () { BIM.call('levels_show_all'); });
+      $('l_view3d').addEventListener('click', function () { BIM.call('levels_view_3d'); });
     }
   };
 

@@ -292,7 +292,15 @@ module BIMSketch
             Commands.declassify_selection
             refresh
           },
-          'refresh' => ->(_d) { refresh }
+          'refresh' => ->(_d) { refresh },
+          'clear_holes' => lambda { |_d|
+            slabs = model.selection.select { |e| Builder.parametric_slab?(e) }
+            model.start_operation('BIMSketch: Togli fori', true)
+            failed = slabs.count { |e| !Builder.clear_slab_holes(model, e) }
+            model.commit_operation
+            ::UI.messagebox("#{failed} solai modificati a mano non sono stati ricostruiti.") if failed.positive?
+            refresh
+          }
         }
       end
 
@@ -307,7 +315,10 @@ module BIMSketch
         end
         data['solid'] = rec[:solid]
         info = Builder.element_height(model, entity)
-        data['dims'] = { 'height' => info[:height].to_m.round(4), 'auto' => info[:auto] } if info
+        if info
+          data['dims'] = { 'height' => info[:height].to_m.round(4), 'auto' => info[:auto],
+                           'top_offset' => Builder.top_offset(entity).to_m.round(4) }
+        end
         if Builder.parametric_wall?(entity)
           g = Builder.wall_geom(entity)
           type = Builder.wall_type(model, entity)
@@ -330,7 +341,7 @@ module BIMSketch
             'layers' => type ? type['layers'] : [],
             'u' => type && WallTypes.u_value(type, external: external,
                                                    flow: WallTypes.flow_for(BimData.type_key(entity))),
-            'thickness' => (g[:thickness] * sz).to_m * 100
+            'thickness' => (g[:thickness] * sz).to_m * 100, 'holes' => g[:holes].size
           }
         end
         if %w[door window].include?(BimData.type_key(entity)) && Builder.host_wall(model, entity)
@@ -364,8 +375,7 @@ module BIMSketch
           nil
         end
         if auto
-          lvl = Levels.find(model, BimData.level_id(entity)) || Levels.for_entity(model, entity)
-          return true if info[:auto] && (info[:height] - lvl['height'].m).abs < 0.5.mm
+          return true if info[:auto] && (info[:height] - Builder.auto_height(model, entity)).abs < 0.5.mm
 
           return Builder.set_height(model, entity, auto: true)
         end

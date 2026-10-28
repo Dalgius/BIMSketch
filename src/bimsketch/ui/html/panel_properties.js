@@ -80,7 +80,9 @@
       return ui.card('Dimensioni e vincolo quota', '', body);
     }
     body = '<label class="callout"><input type="checkbox" id="f_auto_height"' + (dims.auto ? ' checked' : '') + '>' +
-      '<div><b>Altezza segue il livello</b><span>L\'altezza si aggiorna automaticamente quando cambia l\'altezza del livello.</span></div></label>' +
+      '<div><b>Altezza segue il livello</b><span>L\'altezza si aggiorna automaticamente quando cambia l\'altezza del livello' +
+      (dims.top_offset > 0 ? ', fermandosi ' + BIM.num(dims.top_offset * 100, 1) + ' cm sotto (solaio superiore)' : '') +
+      '.</span></div></label>' +
       '<div class="grid2">' +
       ui.field('Altezza (m)', '<div class="unit"><input id="f_height" class="num" value="' + BIM.num(dims.height, 3) + '"' +
         (dims.auto ? ' disabled' : '') + '><span>m</span></div>') + '<div></div></div>';
@@ -107,6 +109,15 @@
     body += '</tbody></table><div class="summary-line"><span>Spessore ' + BIM.num(x.thickness, 1) + ' cm</span><span>U = ' +
       (x.u === null || x.u === undefined ? '— (manca λ)' : BIM.num(x.u, 3) + ' W/m²K') + '</span></div>';
     return ui.card('Stratigrafia', right, body);
+  }
+
+  // Fori del solaio (scale, cavedi).
+  function holesCard(x) {
+    if (!x.holes) return '';
+    return ui.card('Fori nel solaio', '<span class="tag">' + x.holes + '</span>',
+      '<div class="with-btn"><span class="muted small-text">' + (x.holes === 1 ? '1 foro' : x.holes + ' fori') +
+      ' (scale, cavedi). Aggiungili con lo strumento Foro nel solaio o con la Scala.</span>' +
+      '<button class="small danger" id="clearHoles">Togli i fori</button></div>');
   }
 
   // Posizione di porta o finestra nel muro (inviata solo se modificata).
@@ -181,7 +192,7 @@
     var e = state.element;
     var html = identityCard(e) + dimsCard(e.dims, false);
     if (e.wall) html += layersCard(e.wall, 'wall');
-    if (e.slab) html += layersCard(e.slab, 'slab');
+    if (e.slab) html += layersCard(e.slab, 'slab') + holesCard(e.slab);
     if (e.opening) html += openingCard(e.opening);
     html += '<div id="propsBox">' + propsCard(e.type, e.props, false) + '</div>';
     html += customCard(e.custom) + quantitiesCard(e) + classifyCard();
@@ -274,6 +285,9 @@
     var on = function (id, ev, fn) { var el = $(id); if (el) el.addEventListener(ev, fn); };
     on('declassify', 'click', function () {
       if (confirm('Rimuovere i dati BIM dall\'elemento?')) BIM.call('properties_declassify');
+    });
+    on('clearHoles', 'click', function () {
+      if (confirm('Togliere tutti i fori dal solaio?')) BIM.call('properties_clear_holes');
     });
     on('classify', 'click', function () { BIM.call('properties_classify', { type: $('classType').value }); });
     on('copyGuid', 'click', function () {

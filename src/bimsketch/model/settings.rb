@@ -9,7 +9,7 @@ module BIMSketch
       'wall_thickness' => 300, 'wall_height' => 0, 'wall_align' => 'center', 'wall_type' => '',
       'slab_thickness' => 250, 'slab_type' => '',
       'column_width' => 300, 'column_depth' => 300,
-      'beam_width' => 300, 'beam_height' => 500,
+      'beam_width' => 300, 'beam_height' => 500, 'stair_width' => 1000, 'stair_riser' => 175,
       'door_type' => 'D1', 'window_type' => 'W2',
       'door_width' => 900, 'door_height' => 2100,
       'window_width' => 1200, 'window_height' => 1400, 'window_sill' => 900
@@ -66,6 +66,8 @@ module BIMSketch
         ['column_depth', 'Pilastro: profondità (mm)'],
         ['beam_width', 'Trave: larghezza (mm)'],
         ['beam_height', 'Trave: altezza (mm)'],
+        ['stair_width', 'Scala: larghezza (mm)'],
+        ['stair_riser', 'Scala: alzata massima (mm)'],
         ['door_width', 'Porta: larghezza (mm)'],
         ['door_height', 'Porta: altezza (mm)'],
         ['window_width', 'Finestra: larghezza (mm)'],

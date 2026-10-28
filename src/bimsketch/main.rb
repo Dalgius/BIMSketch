@@ -8,8 +8,10 @@ module BIMSketch
 
   %w[core/element_types core/quantities core/guid core/level_list core/step
      core/ifc_writer core/records core/wall_profile core/wall_joint core/wall_types core/opening_types
-     model/settings model/levels model/bim_data model/wall_type_library model/geometry model/builder model/opening_sync model/collector
-     tools/base_tool tools/linear_tools tools/opening_tool
+     core/polygon core/wall_loop core/stair_calc
+     model/settings model/levels model/bim_data model/wall_type_library model/geometry model/builder
+     model/opening_sync model/collector
+     tools/base_tool tools/linear_tools tools/opening_tool tools/slab_tools
      commands ui/dialogs].each { |f| require File.join(ROOT, f) }
 
   module_function
@@ -58,6 +60,16 @@ module BIMSketch
       },
       slab: command('Solaio', 'slab', 'Disegna un solaio cliccando i vertici del contorno.') {
         select_tool(Tools::SlabTool.new)
+      },
+      slab_walls: command('Solaio dai muri', 'slab_walls',
+                          'Crea il solaio sul perimetro dei muri selezionati (filo esterno, in testa ai muri).') {
+        Commands.slab_from_walls
+      },
+      slab_hole: command('Foro nel solaio', 'slab_hole', 'Apre un foro rettangolare in un solaio (scale, cavedi).') {
+        select_tool(Tools::SlabHoleTool.new)
+      },
+      stair: command('Scala', 'stair', 'Scala rettilinea fino al livello superiore, con il foro nel solaio.') {
+        select_tool(Tools::StairTool.new)
       },
       column: command('Pilastro', 'column', 'Posiziona pilastri rettangolari.') {
         select_tool(Tools::ColumnTool.new)
@@ -122,7 +134,7 @@ module BIMSketch
     c = commands
     menu = ::UI.menu('Extensions').add_submenu(EXTENSION_NAME)
     model_menu = menu.add_submenu('Modellazione')
-    %i[wall slab column beam door window from_face].each { |k| model_menu.add_item(c[k]) }
+    %i[wall slab slab_walls slab_hole column beam stair door window from_face].each { |k| model_menu.add_item(c[k]) }
     menu.add_separator
     %i[properties wall_types levels classify].each { |k| menu.add_item(c[k]) }
     menu.add_separator
@@ -134,7 +146,7 @@ module BIMSketch
   def setup_toolbar
     c = commands
     tb = ::UI::Toolbar.new(EXTENSION_NAME)
-    %i[wall slab column beam door window from_face].each { |k| tb.add_item(c[k]) }
+    %i[wall slab slab_walls slab_hole column beam stair door window from_face].each { |k| tb.add_item(c[k]) }
     tb.add_separator
     %i[properties wall_types levels classify].each { |k| tb.add_item(c[k]) }
     tb.add_separator
@@ -161,6 +173,9 @@ module BIMSketch
         sub.add_item('Rimuovi classificazione BIM') { Commands.declassify_selection }
       end
       sub.add_item('Elemento da faccia...') { Commands.elements_from_faces } if sel.any? { |e| e.is_a?(Sketchup::Face) }
+      if sel.count { |e| Builder.parametric_wall?(e) } >= 3
+        sub.add_item('Solaio dai muri selezionati') { Commands.slab_from_walls }
+      end
     end
   end
 

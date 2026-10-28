@@ -100,6 +100,7 @@ module BIMSketchAutotest
       run_opening_types
       run_sketchup_move
       run_reveals
+      run_slab_from_walls
       run_other_elements
       run_level_change
       run_classification
@@ -665,6 +666,78 @@ module BIMSketchAutotest
       end
     end
 
+    def run_slab_from_walls
+      puts "\n[Solai dai muri, fori e scale]"
+      b = BIMSketch::Builder
+      BIMSketch::Levels.set_current(model, 'L0')
+      h0 = BIMSketch::Levels.find(model, 'L0')['height']
+      check('Solaio dal perimetro dei muri (filo esterno, in testa ai muri)') do
+        pts = [pt(0, 200, 0), pt(8, 200, 0), pt(8, 206, 0), pt(0, 206, 0)]
+        model.start_operation('Autotest solaio dai muri', true)
+        walls = b.wall_chain(model, pts, 0.3.m, h0.m, 'center', closed: true)
+        res = b.slab_from_walls(model, walls.reverse, 0.25.m)
+        model.commit_operation
+        assert(res[:slab], "errore: #{res[:error]}")
+        assert(res[:failed].zero?, "#{res[:failed]} muri non abbassati")
+        @e[:room_walls] = walls
+        @e[:room_slab] = s = res[:slab]
+        bb = s.bounds
+        assert(walls.all? { |w| b.element_height(model, w)[:auto] }, 'i muri non seguono più il livello')
+        [approx(bb.min.x.to_m, -0.15, 0.001, 'bordo esterno x'), approx(bb.max.y.to_m, 206.15, 0.001, 'bordo esterno y'),
+         approx(bb.max.z.to_m, h0, 0.001, 'estradosso'),
+         approx(volume_m3(s), 8.3 * 6.3 * 0.25, 0.002, 'volume'),
+         approx(height_m(walls.first), h0 - 0.25, 0.001, 'muri sotto il solaio')].join(', ')
+      end
+      check('Perimetro aperto rifiutato') do
+        model.start_operation('Autotest perimetro aperto', true)
+        res = b.slab_from_walls(model, @e[:room_walls].first(3), 0.25.m)
+        model.commit_operation
+        assert(res[:error], 'solaio creato da un perimetro aperto')
+        'ok'
+      end
+      check('Foro nel solaio (rettangolo), fuori dal solaio e sovrapposto rifiutati') do
+        s = @e[:room_slab]
+        top = s.bounds.max.z.to_m
+        hole = ->(x0, y0, x1, y1) { [pt(x0, y0, top), pt(x1, y0, top), pt(x1, y1, top), pt(x0, y1, top)] }
+        vol = volume_m3(s)
+        model.start_operation('Autotest fori', true)
+        ok = b.add_slab_hole(model, s, hole.call(6.5, 204, 7.5, 205))
+        out = b.add_slab_hole(model, s, hole.call(7.5, 201, 9, 202))
+        over = b.add_slab_hole(model, s, hole.call(7, 204.5, 7.8, 205.5))
+        model.commit_operation
+        assert(ok == :ok, "foro: #{ok}")
+        assert(out == :outside, "fuori: #{out}")
+        assert(over == :overlap, "sovrapposto: #{over}")
+        approx(volume_m3(s), vol - 1.0 * 1.0 * 0.25, 0.002, 'volume con il foro')
+      end
+      check('Scala rettilinea con foro automatico nel solaio superiore') do
+        s = @e[:room_slab]
+        vol = volume_m3(s)
+        model.start_operation('Autotest scala', true)
+        res = b.stair(model, pt(0.8, 202.5, 0), pt(5, 202.5, 0), 1.0.m, h0.m)
+        model.commit_operation
+        st = res[:stair]
+        props = BIMSketch::BimData.json_attr(st, 'props')
+        c = BIMSketch::StairCalc.compute(h0)
+        assert(BIMSketch::BimData.type_key(st) == 'stair', 'non classificata come scala')
+        assert(res[:hole] == :ok, "foro: #{res[:hole]}")
+        assert(props['NumberOfRiser'] == c[:risers], "alzate: #{props['NumberOfRiser']}")
+        assert(st.volume > 0, 'la scala non è un solido')
+        [approx(st.bounds.max.z.to_m, h0, 0.001, 'arrivo al piano superiore'),
+         approx((st.bounds.max.x - st.bounds.min.x).to_m, c[:run], 0.002, 'lunghezza rampa'),
+         approx(volume_m3(s), vol - c[:run] * 1.0 * 0.25, 0.002, 'volume solaio con il vano scala'),
+         "#{c[:risers]} alzate da #{format('%.1f', c[:riser] * 100)} cm"].join(', ')
+      end
+      check('Fori tolti dal solaio') do
+        s = @e[:room_slab]
+        model.start_operation('Autotest togli fori', true)
+        ok = b.clear_slab_holes(model, s)
+        model.commit_operation
+        assert(ok, 'fori non tolti')
+        approx(volume_m3(s), 8.3 * 6.3 * 0.25, 0.002, 'volume senza fori')
+      end
+    end
+
     def set_level_height(id, height)
       list = BIMSketch::Levels.all(model).map(&:dup)
       list.find { |l| l['id'] == id }['height'] = height
@@ -980,7 +1053,7 @@ module BIMSketchAutotest
         path = File.join(Dir.tmpdir, 'bimsketch_autotest.ifc')
         w.write(path)
         text = File.read(path)
-        %w[IFCWALL IFCDOOR IFCWINDOW IFCSLAB IFCCOLUMN IFCBEAM IFCSPACE IFCFURNITURE].each do |t|
+        %w[IFCWALL IFCDOOR IFCWINDOW IFCSLAB IFCCOLUMN IFCBEAM IFCSPACE IFCFURNITURE IFCSTAIR].each do |t|
           assert(text.include?("=#{t}("), "#{t} mancante nel file")
         end
         sets = text.scan('=IFCTRIANGULATEDFACESET(').size
@@ -993,7 +1066,8 @@ module BIMSketchAutotest
     def run_ui
       puts "\n[Interfaccia]"
       check('Strumenti attivabili') do
-        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new,
+        tools = [BIMSketch::Tools::WallTool.new, BIMSketch::Tools::SlabTool.new, BIMSketch::Tools::StairTool.new,
+                 BIMSketch::Tools::SlabHoleTool.new,
                  BIMSketch::Tools::ColumnTool.new, BIMSketch::Tools::BeamTool.new,
                  BIMSketch::Tools::OpeningTool.new('door'), BIMSketch::Tools::OpeningTool.new('window')]
         tools.each { |t| model.select_tool(t) }

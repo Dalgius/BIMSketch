@@ -137,11 +137,10 @@ module BIMSketch
 
     # Porta all'altezza del livello i muri e i pilastri con altezza automatica.
     def sync_heights(model, elements, lvl)
-      target = lvl['height'].m
       elements.each do |e|
         info = Builder.element_height(model, e)
         next unless info && info[:auto]
-        next if (info[:height] - target).abs < 0.5.mm
+        next if (info[:height] - Builder.auto_height(model, e, lvl)).abs < 0.5.mm
 
         @skipped = @skipped.to_i + 1 unless Builder.set_height(model, e, auto: true)
       end

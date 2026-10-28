@@ -730,6 +730,7 @@ module BIMSketchAutotest
         res = b.stair(model, pt(0.8, 202.5, 0), pt(5, 202.5, 0), 1.0.m, h0.m)
         model.commit_operation
         st = res[:stair]
+        @e[:stair] = st
         props = BIMSketch::BimData.json_attr(st, 'props')
         c = BIMSketch::StairCalc.compute(h0)
         assert(BIMSketch::BimData.type_key(st) == 'stair', 'non classificata come scala')
@@ -741,6 +742,25 @@ module BIMSketchAutotest
          approx((st.bounds.max.x - st.bounds.min.x).to_m, c[:run], 0.002, 'lunghezza rampa'),
          approx(volume_m3(s), vol - c[:run] * 1.0 * 0.25, 0.002, 'volume solaio con il vano scala'),
          "#{c[:risers]} alzate da #{format('%.1f', c[:riser] * 100)} cm"].join(', ')
+      end
+      check('Modifica della scala: alzate, pedata e larghezza; il vano segue') do
+        st = @e[:stair]
+        s = @e[:room_slab]
+        before = BIMSketch::Builder.stair_data(st)
+        vol = volume_m3(s)
+        model.start_operation('Autotest modifica scala', true)
+        bad = b.update_stair(model, st, risers: 1)
+        res = b.update_stair(model, st, risers: 17, tread: 0.30, width: 1.2)
+        model.commit_operation
+        assert(bad == :invalid, "valori non validi accettati: #{bad}")
+        assert(res == :ok, "modifica: #{res}")
+        props = BIMSketch::BimData.json_attr(st, 'props')
+        assert(props['NumberOfRiser'] == 17 && (props['TreadLength'] - 0.30).abs < 1e-6, "Pset: #{props.inspect}")
+        run = 16 * 0.30
+        [approx((st.bounds.max.x - st.bounds.min.x).to_m, run, 0.002, 'lunghezza'),
+         approx((st.bounds.max.y - st.bounds.min.y).to_m, 1.2, 0.002, 'larghezza'),
+         approx((st.bounds.min.y + st.bounds.max.y).to_m / 2, 202.5, 0.002, 'asse invariato'),
+         approx(volume_m3(s), vol + (before['run'] * before['width'] - run * 1.2) * 0.25, 0.003, 'volume solaio (vano adeguato)')].join(', ')
       end
       check('Scala in asse, a sinistra e a destra della linea') do
         model.start_operation('Autotest allineamento scala', true)

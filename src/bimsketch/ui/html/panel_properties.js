@@ -111,6 +111,37 @@
     return ui.card('Stratigrafia', right, body);
   }
 
+  // Geometria della scala: alzate, pedata e larghezza modificabili; alzata
+  // e regola di Blondel calcolate mentre si scrive.
+  var STAIR_PROPS = ['NumberOfRiser', 'NumberOfTreads', 'RiserHeight', 'TreadLength'];
+
+  function stairCard(st) {
+    var body = '<div class="grid2">' +
+      ui.field('Numero di alzate', '<input id="f_stair_risers" class="num" data-orig="' + st.risers + '" value="' + st.risers + '">') +
+      ui.field('Pedata (cm)', '<div class="unit"><input id="f_stair_tread" class="num" data-orig="' + BIM.num(st.tread * 100, 1) +
+        '" value="' + BIM.num(st.tread * 100, 1) + '"><span>cm</span></div>') +
+      ui.field('Larghezza (cm)', '<div class="unit"><input id="f_stair_width" class="num" data-orig="' + BIM.num(st.width * 100, 1) +
+        '" value="' + BIM.num(st.width * 100, 1) + '"><span>cm</span></div>') +
+      ui.field('Dislivello (m)', '<input readonly class="num" value="' + BIM.num(st.height, 3) + '">') +
+      '</div><div class="summary-line" id="stairInfo"></div>' +
+      '<p class="muted small-text" style="margin:6px 0 0">Applica ricostruisce la scala dalla stessa linea di partenza' +
+      (st.hole ? ' e adegua il vano nel solaio superiore' : '') + '. Regola di Blondel consigliata: 2a + p tra 62 e 64 cm.</p>';
+    return ui.card('Scala', '<span class="tag">' + st.risers + ' alzate</span>', body);
+  }
+
+  function updateStairInfo() {
+    var info = $('stairInfo');
+    if (!info) return;
+    var st = state.element.stair;
+    var n = parseInt($('f_stair_risers').value, 10);
+    var p = parseFloat($('f_stair_tread').value.replace(',', '.'));
+    if (!(n >= 2) || !(p > 0)) { info.textContent = 'Valori non validi'; return; }
+    var a = st.height / n * 100;
+    var b = 2 * a + p;
+    info.innerHTML = '<span>Alzata ' + BIM.num(a, 1) + ' cm · lunghezza ' + BIM.num((n - 1) * p / 100, 2) + ' m</span>' +
+      '<span' + (b < 62 || b > 64 ? ' class="error-text"' : '') + '>2a + p = ' + BIM.num(b, 1) + ' cm</span>';
+  }
+
   // Fori del solaio (scale, cavedi).
   function holesCard(x) {
     if (!x.holes) return '';
@@ -138,6 +169,12 @@
 
   function propControl(p, value, multi) {
     var id = 'prop_' + p.name;
+    // Valori della scala: derivano dalla geometria (riquadro Scala).
+    if (!multi && state.element && state.element.stair && STAIR_PROPS.indexOf(p.name) >= 0) {
+      var v0 = value === null || value === undefined ? '' : String(value).replace('.', ',');
+      return '<input readonly id="' + id + '" data-prop="' + p.name + '" title="Dalla geometria della scala" value="' +
+        esc(v0) + '">';
+    }
     if (p.type === 'boolean') {
       var v = value === true ? 'true' : value === false ? 'false' : '';
       return '<select id="' + id + '" data-prop="' + p.name + '">' + yesNo(v, multi ? '(invariato)' : '—') + '</select>';
@@ -194,6 +231,7 @@
     if (e.wall) html += layersCard(e.wall, 'wall');
     if (e.slab) html += layersCard(e.slab, 'slab') + holesCard(e.slab);
     if (e.opening) html += openingCard(e.opening);
+    if (e.stair) html += stairCard(e.stair);
     html += '<div id="propsBox">' + propsCard(e.type, e.props, false) + '</div>';
     html += customCard(e.custom) + quantitiesCard(e) + classifyCard();
     html += '<div class="toolbar"><button class="small ghost danger" id="declassify">Rimuovi classificazione BIM</button></div>';
@@ -258,6 +296,10 @@
       var f = $('f_opening_' + k);
       if (f && f.value !== f.getAttribute('data-orig')) el['opening_' + k] = f.value;
     });
+    ['risers', 'tread', 'width'].forEach(function (k) {
+      var f = $('f_stair_' + k);
+      if (f && f.value !== f.getAttribute('data-orig')) el['stair_' + k] = f.value;
+    });
     var ot = $('f_opening_type_id');
     if (ot) el.opening_type_id = ot.value;
     var od = $('f_opening_depth');
@@ -295,6 +337,8 @@
       f.select();
       try { document.execCommand('copy'); BIM.panel.status('GlobalId copiato'); } catch (e) { /* niente appunti */ }
     });
+    ['f_stair_risers', 'f_stair_tread'].forEach(function (id) { on(id, 'input', updateStairInfo); });
+    updateStairInfo();
     on('f_auto_height', 'change', function () {
       var a = $('f_auto_height');
       if (a.type === 'checkbox') $('f_height').disabled = a.checked;

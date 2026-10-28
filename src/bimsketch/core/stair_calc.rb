@@ -21,6 +21,18 @@ module BIMSketch
       { risers: risers, riser: riser, tread: tread, treads: treads, run: treads * tread, height: height }
     end
 
+    # Scala con numero di alzate e pedata scelti (stessa forma di compute).
+    def fixed(height, risers, tread)
+      risers = [risers.to_i, 2].max
+      { risers: risers, riser: height / risers, tread: tread.to_f, treads: risers - 1,
+        run: (risers - 1) * tread.to_f, height: height }
+    end
+
+    # Valore della regola di Blondel (2a + p) in metri.
+    def blondel(calc)
+      2 * calc[:riser] + calc[:tread]
+    end
+
     # Profilo laterale della rampa [[x, z], ...]: gradini dall'origine verso
     # +x, intradosso parallelo all'inclinazione con soletta di spessore waist.
     # La rampa finisce con l'ultima pedata (a quota height - alzata): l'ultima

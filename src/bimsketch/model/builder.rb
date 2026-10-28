@@ -561,21 +561,32 @@ module BIMSketch
     # solaio con tutti i suoi strati. Restituisce :ok, :modified (solaio
     # modificato a mano), :outside (il foro esce dal solaio o tocca il bordo)
     # o :overlap (si sovrappone a un altro foro).
-    def add_slab_hole(model, slab, points)
+    # replace: foro esistente (poligono locale) da sostituire con il nuovo.
+    def add_slab_hole(model, slab, points, replace: nil)
       g = slab_geom(slab)
       return :modified unless g && slab_intact?(slab, g)
 
+      hole = slab_local_polygon(model, slab, points)
+      holes = replace ? g[:holes].reject { |h| same_polygon?(h, replace) } : g[:holes]
+      return :outside unless Polygon.inside?(hole, g[:outline])
+      return :overlap if holes.any? { |h| Polygon.overlap?(h, hole) }
+
+      rebuild_slab(model, slab, g.merge(holes: holes + [hole]))
+      :ok
+    end
+
+    # Punti mondo proiettati nel sistema locale del solaio (antiorari).
+    def slab_local_polygon(model, slab, points)
       inv = slab.transformation.inverse
-      hole = points.map do |p|
+      poly = points.map do |p|
         q = Geometry.to_active(model, p).transform(inv)
         [q.x.to_f, q.y.to_f]
       end
-      hole.reverse! if Polygon.signed_area(hole).negative?
-      return :outside unless Polygon.inside?(hole, g[:outline])
-      return :overlap if g[:holes].any? { |h| Polygon.overlap?(h, hole) }
+      Polygon.signed_area(poly).negative? ? poly.reverse : poly
+    end
 
-      rebuild_slab(model, slab, g.merge(holes: g[:holes] + [hole]))
-      :ok
+    def same_polygon?(p, q)
+      p.size == q.size && p.zip(q).all? { |a, b| (a[0] - b[0]).abs < 0.5.mm && (a[1] - b[1]).abs < 0.5.mm }
     end
 
     # Toglie tutti i fori del solaio. false se è stato modificato a mano.
@@ -733,33 +744,116 @@ module BIMSketch
       origin = Geom::Point3d.new(start.x, start.y, start.z)
       origin = origin.offset(Z_AXIS * x, lo) unless lo.zero?
       tr = Geometry.frame_transform(origin, x)
-      pts = StairCalc.profile(calc, waist: waist.to_m).map { |px, pz| [px.m, pz.m] }
-      group = Geometry.create_group(model, tr) { |ents| Geometry.extrude_xz(ents, pts, width) }
-      finish(model, group, 'stair', { 'stair_geom' => JSON.generate(calc.merge(width: width.to_m)) })
-      props = BimData.json_attr(group, 'props').merge(
-        'NumberOfRiser' => calc[:risers], 'NumberOfTreads' => calc[:treads],
-        'RiserHeight' => calc[:riser].round(4), 'TreadLength' => calc[:tread].round(4)
-      )
-      group.set_attribute(BimData::DICT, 'props', JSON.generate(props))
-      group.set_attribute(BimData::DICT, 'object_type',
-                          format('Scala rettilinea, %d alzate da %.1f cm, pedata %.1f cm', calc[:risers],
-                                 calc[:riser] * 100, calc[:tread] * 100).tr('.', ','))
-      hole = cut_slab ? stair_hole(model, tr, calc[:run].m, width, start.z + height) : :none
+      data = stair_record(calc, width.to_m, waist.to_m, align)
+      group = Geometry.create_group(model, tr) { |ents| build_stair(ents, data) }
+      finish(model, group, 'stair')
+      store_stair(group, data)
+      hole = cut_slab ? stair_hole(model, group) : :none
       { stair: group, hole: hole }
     end
 
-    # Foro, grande quanto l'impronta della rampa, nel solaio con l'estradosso
-    # alla quota top_z sopra la scala (tr: sistema locale della scala, mondo).
-    def stair_hole(model, tr, run, width, top_z)
-      corners = [[0, 0], [run, 0], [run, width], [0, width]].map do |x, y|
-        p = Geom::Point3d.new(x, y, 0).transform(tr)
-        Geom::Point3d.new(p.x, p.y, top_z)
-      end
-      center = Geom::Point3d.new(corners.sum(&:x) / 4.0, corners.sum(&:y) / 4.0, top_z + 1.m)
-      hit = slab_under_ray(model, [center, Geom::Vector3d.new(0, 0, -1)])
-      return :none unless hit && (hit[1].z - top_z).abs < 1.mm
+    def stair_record(calc, width, waist, align)
+      calc.transform_keys(&:to_s).merge('width' => width, 'waist' => waist, 'align' => align)
+    end
 
-      add_slab_hole(model, hit[0], corners)
+    def build_stair(ents, data)
+      calc = data.transform_keys(&:to_sym)
+      pts = StairCalc.profile(calc, waist: data['waist']).map { |px, pz| [px.m, pz.m] }
+      Geometry.extrude_xz(ents, pts, data['width'].m)
+    end
+
+    # Dati della scala (metri): risers, riser, tread, treads, run, height,
+    # width, waist, align e, se ha aperto un vano, hole { slab:, polygon: }.
+    def stair_data(stair)
+      return nil unless BimData.element?(stair) && BimData.type_key(stair) == 'stair'
+
+      raw = stair.get_attribute(BimData::DICT, 'stair_geom')
+      d = raw && JSON.parse(raw)
+      return nil unless d && d['risers']
+
+      { 'waist' => 0.18, 'align' => 'center' }.merge(d)
+    rescue JSON::ParserError
+      nil
+    end
+
+    # Salva i dati della scala e ne aggiorna Pset e tipologia (ObjectType).
+    def store_stair(stair, data)
+      stair.set_attribute(BimData::DICT, 'stair_geom', JSON.generate(data))
+      props = BimData.json_attr(stair, 'props').merge(
+        'NumberOfRiser' => data['risers'], 'NumberOfTreads' => data['treads'],
+        'RiserHeight' => data['riser'].round(4), 'TreadLength' => data['tread'].round(4)
+      )
+      stair.set_attribute(BimData::DICT, 'props', JSON.generate(props))
+      stair.set_attribute(BimData::DICT, 'object_type',
+                          format('Scala rettilinea, %d alzate da %.1f cm, pedata %.1f cm', data['risers'],
+                                 data['riser'] * 100, data['tread'] * 100).tr('.', ','))
+    end
+
+    # Impronta della rampa in pianta (punti mondo alla quota z).
+    def stair_footprint(model, stair, data, z)
+      ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
+      world = ctx * stair.transformation
+      run = data['run'].m
+      w = data['width'].m
+      [[0, 0], [run, 0], [run, w], [0, w]].map do |x, y|
+        p = Geom::Point3d.new(x, y, 0).transform(world)
+        Geom::Point3d.new(p.x, p.y, z)
+      end
+    end
+
+    # Foro, grande quanto l'impronta della rampa, nel solaio con l'estradosso
+    # alla quota di arrivo; il vano viene registrato nella scala per poterlo
+    # adeguare quando la scala cambia. replace: vano precedente.
+    def stair_hole(model, stair, replace: nil)
+      data = stair_data(stair)
+      ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
+      top_z = Geom::Point3d.new(0, 0, 0).transform(ctx * stair.transformation).z + data['height'].m
+      corners = stair_footprint(model, stair, data, top_z)
+      slab = replace && model.active_entities.find { |e| parametric_slab?(e) && BimData.guid(e) == replace['slab'] }
+      unless slab
+        center = Geom::Point3d.new(corners.sum(&:x) / 4.0, corners.sum(&:y) / 4.0, top_z + 1.m)
+        hit = slab_under_ray(model, [center, Geom::Vector3d.new(0, 0, -1)])
+        return :none unless hit && (hit[1].z - top_z).abs < 1.mm
+
+        slab = hit[0]
+      end
+      result = add_slab_hole(model, slab, corners, replace: replace && replace['polygon'])
+      if result == :ok
+        data['hole'] = { 'slab' => BimData.guid(slab), 'polygon' => slab_local_polygon(model, slab, corners) }
+        stair.set_attribute(BimData::DICT, 'stair_geom', JSON.generate(data))
+      end
+      result
+    end
+
+    # Cambia alzate (numero), pedata e larghezza (m) di una scala e la
+    # ricostruisce sul posto: la linea di partenza e l'allineamento restano,
+    # il vano nel solaio segue. Restituisce :ok, :invalid (valori fuori dai
+    # limiti) oppure lo stato del vano non adeguato (:outside, :overlap, :modified).
+    def update_stair(model, stair, risers: nil, tread: nil, width: nil)
+      d = stair_data(stair)
+      return :invalid unless d
+
+      n = (risers || d['risers']).to_i
+      p = (tread || d['tread']).to_f
+      w = (width || d['width']).to_f
+      return :invalid unless n >= 2 && n <= 60 && p.between?(0.15, 0.45) && w >= 0.4 && w <= 5.0
+
+      data = stair_record(StairCalc.fixed(d['height'].to_f, n, p), w, d['waist'], d['align'])
+      tr = stair.transformation
+      x = X_AXIS.transform(tr).normalize
+      lo_old, = WallJoint.band(d['align'], d['width'].to_f.m)
+      lo_new, = WallJoint.band(d['align'], w.m)
+      origin = Geom::Point3d.new(0, 0, 0).transform(tr)
+      origin = origin.offset(Z_AXIS * x, lo_new - lo_old) unless (lo_new - lo_old).abs < Geometry::TOL
+      stair.make_unique if stair.respond_to?(:make_unique)
+      stair.definition.entities.clear!
+      build_stair(stair.definition.entities, data)
+      stair.transformation = Geometry.frame_transform(origin, x)
+      data['hole'] = d['hole'] if d['hole']
+      store_stair(stair, data)
+      return :ok unless d['hole']
+
+      stair_hole(model, stair, replace: d['hole']).then { |r| r == :none ? :ok : r }
     end
 
     # Pilastro rettangolare centrato in center (base alla quota di center).

@@ -87,4 +87,13 @@ class StairCalcTest < Minitest::Test
     assert_equal [0.0, 0.0], pts.first
     assert BIMSketch::Polygon.signed_area(pts).abs.positive?
   end
+
+  def test_fixed_risers_and_tread
+    c = S.fixed(3.0, 17, 0.30)
+    assert_equal 16, c[:treads]
+    assert_in_delta 3.0 / 17, c[:riser], 1e-12
+    assert_in_delta 4.8, c[:run], 1e-12
+    assert_in_delta 2 * 3.0 / 17 + 0.30, S.blondel(c), 1e-12
+    assert_equal 2, S.fixed(3.0, 1, 0.3)[:risers]
+  end
 end

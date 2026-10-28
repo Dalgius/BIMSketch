@@ -355,6 +355,12 @@ module BIMSketch
             data['opening']['sill'] = pos[:sill].to_m.round(4) if BimData.type_key(entity) == 'window'
           end
         end
+        st = Builder.stair_data(entity)
+        if st
+          data['stair'] = { 'risers' => st['risers'], 'riser' => st['riser'], 'tread' => st['tread'],
+                            'width' => st['width'], 'height' => st['height'], 'run' => st['run'],
+                            'hole' => !st['hole'].nil? }
+        end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
       end
@@ -417,6 +423,27 @@ module BIMSketch
         Float(value.to_s.strip.tr(',', '.')).m
       rescue ArgumentError, TypeError
         nil
+      end
+
+      # Geometria della scala (campi 'stair_risers', 'stair_tread' e
+      # 'stair_width' in cm, inviati solo se modificati).
+      def apply_stair(entity, el)
+        return true unless Builder.stair_data(entity)
+
+        risers = el['stair_risers'].to_s.strip.empty? ? nil : el['stair_risers'].to_i
+        tread = parse_m(el['stair_tread'])
+        width = parse_m(el['stair_width'])
+        return true unless risers || tread || width
+
+        result = Builder.update_stair(model, entity, risers: risers, tread: tread && tread.to_m / 100.0,
+                                                     width: width && width.to_m / 100.0)
+        @stair_message = {
+          invalid: 'Valori della scala non validi: almeno 2 alzate, pedata tra 15 e 45 cm, larghezza tra 40 e 500 cm.',
+          outside: 'Scala aggiornata, ma il vano nel solaio non è stato adeguato: uscirebbe dal solaio.',
+          overlap: 'Scala aggiornata, ma il vano nel solaio non è stato adeguato: si sovrapporrebbe a un altro foro.',
+          modified: 'Scala aggiornata, ma il solaio è stato modificato a mano: il vano non è stato adeguato.'
+        }[result]
+        result != :invalid
       end
 
       # Tipologia di porta o finestra (campo 'opening_type_id').
@@ -485,6 +512,7 @@ module BIMSketch
         elements = model.selection.select { |e| BimData.element?(e) }
         return if elements.empty?
 
+        @stair_message = nil
         failed = 0
         model.start_operation('BIMSketch: Proprietà', true)
         if data['mode'] == 'single'
@@ -498,6 +526,7 @@ module BIMSketch
           failed += 1 unless apply_slab_type(elements.first, data['element'] || {})
           failed += 1 unless apply_opening_type(elements.first, data['element'] || {})
           failed += 1 unless apply_opening_position(elements.first, data['element'] || {})
+          failed += 1 unless apply_stair(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
@@ -518,6 +547,11 @@ module BIMSketch
         model.commit_operation
         refresh
         push('saved', true)
+        if @stair_message
+          ::UI.messagebox(@stair_message)
+          @stair_message = nil
+          return
+        end
         if failed.positive?
           ::UI.messagebox("#{failed} modifiche di altezza o tipologia non applicate: gli elementi sono stati " \
                           'modificati a mano oppure le aperture non entrerebbero nel muro.')

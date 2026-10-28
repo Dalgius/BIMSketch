@@ -1000,6 +1000,16 @@ module BIMSketchAutotest
         model.select_tool(nil)
         "#{tools.size} strumenti"
       end
+      check('Riferimento per gli assi sull\'ultimo punto (dopo una misura digitata)') do
+        tool = BIMSketch::Tools::WallTool.new
+        model.select_tool(tool)
+        p = pt(3.25, 1.5, 0)
+        tool.send(:reference_at, p)
+        ref = tool.instance_variable_get(:@ref_ip)
+        model.select_tool(nil)
+        assert(ref.valid?, 'punto di riferimento non valido')
+        approx(ref.position.distance(p).to_m, 0.0, 0.0001, 'distanza dal punto')
+      end
       check('File dei dialoghi presenti') do
         %w[panel schedule checker].each do |n|
           f = File.join(BIMSketch::Dialogs::HTML_DIR, "#{n}.html")

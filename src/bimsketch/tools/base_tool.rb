@@ -96,6 +96,13 @@ module BIMSketch
 
       def update_preview(_view); end
 
+      # Riferimento per l'inferenza (assi, parallele) nel punto indicato:
+      # l'ultimo punto effettivamente usato, non la posizione del mouse, che
+      # dopo una misura digitata è altrove.
+      def reference_at(point)
+        @ref_ip = Sketchup::InputPoint.new(point)
+      end
+
       # Posizione corrente proiettata sulla quota z indicata.
       def projected(z)
         p = @ip.position

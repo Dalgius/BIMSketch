@@ -11,7 +11,7 @@ module BIMSketch
         pt = projected(level_z)
         if @points.empty?
           @points << snapped(pt)
-          @ref_ip.copy!(@ip)
+          reference_at(@points.last)
         else
           create_to(pt)
         end
@@ -108,7 +108,7 @@ module BIMSketch
           reset_tool
         else
           @points << result[:end_point]
-          @ref_ip.copy!(@ip)
+          reference_at(@points.last)
         end
       end
 
@@ -167,7 +167,7 @@ module BIMSketch
                        Settings.length('beam_height'), top_z)
         end
         @points << pt if beam
-        @ref_ip.copy!(@ip)
+        reference_at(@points.last)
       end
     end
 
@@ -184,7 +184,7 @@ module BIMSketch
           create
         else
           @points << pt unless @points.last && @points.last.distance(pt) < Geometry::TOL
-          @ref_ip.copy!(@ip)
+          reference_at(@points.last)
         end
         update_ui
         view.invalidate
@@ -210,6 +210,7 @@ module BIMSketch
         return if dir.length < Geometry::TOL
 
         @points << @points.last.offset(dir, len)
+        reference_at(@points.last)
         update_ui
         view.invalidate
       end

@@ -124,7 +124,7 @@ module BIMSketch
     model_menu = menu.add_submenu('Modellazione')
     %i[wall slab column beam door window from_face].each { |k| model_menu.add_item(c[k]) }
     menu.add_separator
-    %i[properties levels wall_types classify].each { |k| menu.add_item(c[k]) }
+    %i[properties wall_types levels classify].each { |k| menu.add_item(c[k]) }
     menu.add_separator
     %i[schedule checker ifc csv].each { |k| menu.add_item(c[k]) }
     menu.add_separator
@@ -136,7 +136,7 @@ module BIMSketch
     tb = ::UI::Toolbar.new(EXTENSION_NAME)
     %i[wall slab column beam door window from_face].each { |k| tb.add_item(c[k]) }
     tb.add_separator
-    %i[properties levels wall_types classify].each { |k| tb.add_item(c[k]) }
+    %i[properties wall_types levels classify].each { |k| tb.add_item(c[k]) }
     tb.add_separator
     %i[schedule checker ifc settings].each { |k| tb.add_item(c[k]) }
     tb.restore

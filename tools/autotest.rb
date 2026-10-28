@@ -723,7 +723,8 @@ module BIMSketchAutotest
         assert(res[:hole] == :ok, "foro: #{res[:hole]}")
         assert(props['NumberOfRiser'] == c[:risers], "alzate: #{props['NumberOfRiser']}")
         assert(st.volume > 0, 'la scala non è un solido')
-        [approx(st.bounds.max.z.to_m, h0, 0.001, 'arrivo al piano superiore'),
+        # L'ultima alzata è il bordo del solaio: la rampa arriva a un'alzata dal piano superiore.
+        [approx(st.bounds.max.z.to_m, h0 - c[:riser], 0.001, 'ultima pedata'),
          approx((st.bounds.max.x - st.bounds.min.x).to_m, c[:run], 0.002, 'lunghezza rampa'),
          approx(volume_m3(s), vol - c[:run] * 1.0 * 0.25, 0.002, 'volume solaio con il vano scala'),
          "#{c[:risers]} alzate da #{format('%.1f', c[:riser] * 100)} cm"].join(', ')

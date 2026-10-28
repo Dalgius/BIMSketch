@@ -73,7 +73,16 @@ class StairCalcTest < Minitest::Test
   def test_profile_reaches_floor_and_top
     c = S.compute(3.0)
     pts = S.profile(c)
-    assert_in_delta 3.0, pts.map(&:last).max, 1e-9
+    # The last riser is the edge of the slab above.
+    assert_in_delta 3.0 - c[:riser], pts.map(&:last).max, 1e-9
+    assert_equal pts.size, pts.uniq.size
+    # No two consecutive edges run back over each other.
+    pts.each_index do |i|
+      a, b, d = pts[i - 1], pts[i], pts[(i + 1) % pts.size]
+      u = [b[0] - a[0], b[1] - a[1]]
+      v = [d[0] - b[0], d[1] - b[1]]
+      refute (u[0] * v[1] - u[1] * v[0]).abs < 1e-12 && (u[0] * v[0] + u[1] * v[1]).negative?, "edge reversal at #{i}"
+    end
     assert_in_delta c[:run], pts.map(&:first).max, 1e-9
     assert_equal [0.0, 0.0], pts.first
     assert BIMSketch::Polygon.signed_area(pts).abs.positive?

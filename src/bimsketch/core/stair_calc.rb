@@ -23,14 +23,16 @@ module BIMSketch
 
     # Profilo laterale della rampa [[x, z], ...]: gradini dall'origine verso
     # +x, intradosso parallelo all'inclinazione con soletta di spessore waist.
+    # La rampa finisce con l'ultima pedata (a quota height - alzata): l'ultima
+    # alzata, fino al piano superiore, è il bordo del solaio di arrivo.
     def profile(calc, waist: 0.18)
       a = calc[:riser]
       p = calc[:tread]
       n = calc[:risers]
       pts = [[0.0, 0.0]]
-      n.times do |i|
+      (n - 1).times do |i|
         pts << [i * p, (i + 1) * a]
-        pts << [(i + 1) * p, (i + 1) * a] if i < n - 1
+        pts << [(i + 1) * p, (i + 1) * a]
       end
       # Intradosso: retta z = x·a/p - waist/cos(θ), tagliata sul pavimento.
       drop = waist * Math.sqrt(a * a + p * p) / p

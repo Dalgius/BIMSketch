@@ -701,6 +701,27 @@ module BIMSketchAutotest
         [approx(s.bounds.max.z.to_m, 0.0, 0.001, 'estradosso alla base'),
          approx(height_m(walls.first), h0 - 0.25, 0.001, 'muri invariati')].join(', ')
       end
+      check('Il solaio in testa segue l\'altezza del livello; a quota fissa resta fermo') do
+        s = @e[:room_slab]
+        walls = @e[:room_walls]
+        assert(b.slab_anchor(s) == 'below', "vincolo del solaio in testa: #{b.slab_anchor(s)}")
+        set_level_height('L0', h0 + 0.5)
+        up = s.bounds.max.z.to_m
+        wall_up = height_m(walls.first)
+        model.start_operation('Autotest solaio a quota fissa', true)
+        b.set_slab_anchor(model, s, 'fixed')
+        model.commit_operation
+        set_level_height('L0', h0)
+        fixed = s.bounds.max.z.to_m
+        model.start_operation('Autotest solaio in testa', true)
+        b.set_slab_anchor(model, s, 'below', top: h0.m)
+        model.commit_operation
+        set_level_height('L0', h0)
+        [approx(up, h0 + 0.5, 0.001, 'estradosso con il livello più alto'),
+         approx(wall_up, h0 + 0.25, 0.001, 'muri sotto il solaio'),
+         approx(fixed, h0 + 0.5, 0.001, 'estradosso a quota fissa'),
+         approx(s.bounds.max.z.to_m, h0, 0.001, 'estradosso di nuovo in testa')].join(', ')
+      end
       check('Perimetro aperto rifiutato') do
         model.start_operation('Autotest perimetro aperto', true)
         res = b.slab_from_walls(model, @e[:room_walls].first(3), 0.25.m)
@@ -1162,6 +1183,26 @@ module BIMSketchAutotest
         assert(model.active_view.camera.perspective?, 'vista non in prospettiva')
         BIMSketch::Levels.create_plan_view(model, 'L0') # la pianta resta per i controlli successivi
         'sezione disattivata, scena "Vista 3D" creata'
+      end
+      check('Selezione multipla: il pannello mostra i valori comuni') do
+        model.start_operation('Autotest selezione multipla', true)
+        walls = [0, 6, 12].map do |x|
+          BIMSketch::Builder.wall(model, pt(x, 300, 0), pt(x + 5, 300, 0), 0.3.m, 3.m, 'center', type_id: 'WT1')
+        end
+        BIMSketch::Builder.set_height(model, walls[2], height: 2.7.m, auto: false)
+        model.commit_operation
+        panel = BIMSketch::Dialogs::Properties.allocate
+        same = panel.send(:common_payload, walls.first(2))
+        mixed = panel.send(:common_payload, walls)
+        model.start_operation('Autotest selezione multipla', true)
+        walls.each(&:erase!)
+        model.commit_operation
+        assert(same['wall_type_id'] == 'WT1' && same['type'] == 'wall', "comuni: #{same.inspect}")
+        assert(same['height'] && (same['height'] - 3.0).abs < 0.001, "altezza comune: #{same['height'].inspect}")
+        assert(!same['props'].empty?, 'nessuna proprietà Pset comune')
+        assert(!mixed.key?('height') && mixed['wall_type_id'] == 'WT1', "altezze diverse: #{mixed.inspect}")
+        "stratigrafia #{same['wall_type_id']}, altezza #{same['height']}, #{same['props'].size} proprietà comuni; " \
+          'altezze diverse non mostrate'
       end
       check('In pianta porte e finestre trovano il muro sotto il cursore') do
         down = Geom::Vector3d.new(0, 0, -1)

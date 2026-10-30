@@ -266,6 +266,7 @@ module BIMSketch
           data['dims'] = elements.any? { |e| Builder.element_height(model, e) }
           data['wall_types'] = wall_types_payload if elements.any? { |e| Builder.parametric_wall?(e) }
           data['slab_types'] = wall_types_payload('slab') if elements.any? { |e| Builder.parametric_slab?(e) }
+          data['slab_anchors'] = anchors_payload if elements.any? { |e| Builder.slab?(e) }
           kinds = elements.map { |e| BimData.type_key(e) }.uniq
           if kinds.size == 1 && %w[door window].include?(kinds.first)
             data['opening_types'] = opening_types_payload(kinds.first)
@@ -273,6 +274,7 @@ module BIMSketch
           data['summary'] = elements.group_by { |e| BimData.type(e) }.map do |t, es|
             { 'label' => t ? t.plural : '?', 'count' => es.size }
           end
+          data['common'] = common_payload(elements)
         else
           data['mode'] = 'none'
         end
@@ -302,6 +304,58 @@ module BIMSketch
             refresh
           }
         }
+      end
+
+      # Valori uguali in tutti gli elementi selezionati (gli altri restano
+      # vuoti nel pannello: "valori diversi").
+      def common_payload(elements)
+        values = elements.map { |e| comparable_values(e) }
+        common = {}
+        values.first.each do |k, v|
+          next if k == 'props'
+
+          common[k] = v if values.all? { |h| h.key?(k) && h[k] == v }
+        end
+        props = values.map { |h| h['props'] }
+        common['props'] = props.first.select { |k, v| props.all? { |p| p.key?(k) && p[k] == v } }
+        common
+      end
+
+      def comparable_values(entity)
+        d = BimData.read(entity)
+        h = d.slice('type', 'level', 'object_type', 'material')
+        h['props'] = d['props']
+        info = Builder.element_height(model, entity)
+        if info
+          h['auto_height'] = info[:auto]
+          h['height'] = info[:height].to_m.round(4)
+        end
+        if Builder.parametric_wall?(entity)
+          g = Builder.wall_geom(entity)
+          h['wall_type_id'] = g ? g[:type_id].to_s : ''
+          h['wall_flipped'] = g ? g[:flipped] == true : false
+        end
+        h['slab_type_id'] = Builder.slab_geom_type_id(entity).to_s if Builder.parametric_slab?(entity)
+        if Builder.slab?(entity)
+          h['slab_anchor'] = Builder.slab_anchor(entity)
+          h['slab_top'] = Builder.slab_top(entity).to_m.round(4)
+        end
+        h['opening_type_id'] = entity.get_attribute(BimData::DICT, 'opening_type').to_s if
+          %w[door window].include?(BimData.type_key(entity))
+        h
+      end
+
+      def anchors_payload
+        Builder::SLAB_ANCHORS.map { |k, v| { 'id' => k, 'name' => v } }
+      end
+
+      # Vincolo dell'estradosso del solaio: scelta, quota e riferimento.
+      def slab_anchor_payload(entity)
+        anchor = Builder.slab_anchor(entity)
+        ref = Builder.slab_reference(model, entity)
+        lvl = anchor == 'below' ? Builder.anchor_level(model, entity) : Levels.find(model, BimData.level_id(entity))
+        { 'anchor' => anchor, 'anchors' => anchors_payload, 'top' => Builder.slab_top(entity).to_m.round(4),
+          'reference' => ref && ref.to_m.round(4), 'reference_level' => lvl ? lvl['name'] : '' }
       end
 
       def element_payload(entity)
@@ -343,6 +397,7 @@ module BIMSketch
                                                    flow: WallTypes.flow_for(BimData.type_key(entity))),
             'thickness' => (g[:thickness] * sz).to_m * 100, 'holes' => g[:holes].size
           }
+          data['slab'].merge!(slab_anchor_payload(entity))
         end
         if %w[door window].include?(BimData.type_key(entity)) && Builder.host_wall(model, entity)
           data['opening'] = { 'type_id' => entity.get_attribute(BimData::DICT, 'opening_type').to_s,
@@ -470,12 +525,14 @@ module BIMSketch
         g = Builder.wall_geom(entity)
         if el.key?('wall_type_id') && !el['wall_type_id'].nil? && g
           id = el['wall_type_id'].to_s
+          # Stratigrafie diverse ma stesso verso scelto: ognuno tiene la sua.
+          id = g[:type_id].to_s if id == '(invariato)'
           flipped = case el['wall_flipped']
                     when true, 'true' then true
                     when false, 'false' then false
                     else g[:flipped]
                     end
-          unless id == '(invariato)' || (id == g[:type_id].to_s && flipped == g[:flipped])
+          unless id == g[:type_id].to_s && flipped == g[:flipped]
             ok = Builder.apply_wall_type(model, entity, id.empty? ? nil : id, flipped: flipped)
           end
         end
@@ -496,6 +553,20 @@ module BIMSketch
         type = Builder.slab_type(model, entity)
         Builder.apply_slab_type_data(model, entity, type) if type
         ok
+      end
+
+      # Vincolo ed estradosso del solaio (campi 'slab_anchor' e 'slab_top' in
+      # m, quest'ultimo inviato solo se modificato).
+      def apply_slab_anchor(entity, el)
+        return true unless Builder.slab?(entity)
+
+        anchor = el['slab_anchor'].to_s
+        anchor = Builder.slab_anchor(entity) unless Builder::SLAB_ANCHORS.key?(anchor)
+        top = parse_m(el['slab_top'])
+        return true if anchor == Builder.slab_anchor(entity) && top.nil? &&
+                       !entity.get_attribute(BimData::DICT, 'anchor_offset').nil?
+
+        Builder.set_slab_anchor(model, entity, anchor, top: top)
       end
 
       # Livello scelto nel pannello: gli elementi che cambiano livello si
@@ -527,6 +598,7 @@ module BIMSketch
           failed += 1 unless apply_opening_type(elements.first, data['element'] || {})
           failed += 1 unless apply_opening_position(elements.first, data['element'] || {})
           failed += 1 unless apply_stair(elements.first, data['element'] || {})
+          failed += 1 unless apply_slab_anchor(elements.first, data['element'] || {})
         else
           changes = data['element'] || {}
           elements.each do |e|
@@ -541,6 +613,7 @@ module BIMSketch
             failed += 1 unless apply_wall_type(e, changes)
             failed += 1 unless apply_slab_type(e, changes)
             failed += 1 unless apply_opening_type(e, changes)
+            failed += 1 unless apply_slab_anchor(e, changes)
           end
           failed += change_level(elements, changes['level'])
         end

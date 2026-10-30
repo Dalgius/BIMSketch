@@ -73,10 +73,14 @@
     if (!dims) return '';
     var body;
     if (multi) {
+      var c = state.common || {};
+      var auto = 'auto_height' in c ? String(c.auto_height) : '';
       body = '<div class="grid2">' +
         ui.field('Altezza segue il livello', '<select id="f_auto_height">' +
-          ui.options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No (valore fisso)' }], '', '(invariato)') + '</select>') +
-        ui.field('Altezza (m)', '<input id="f_height" class="num" placeholder="(invariato)">') + '</div>';
+          ui.options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No (valore fisso)' }], auto,
+            auto ? undefined : DIFFERENT) + '</select>') +
+        ui.field('Altezza (m)', '<input id="f_height" class="num"' + commonValue('height' in c ? BIM.num(c.height, 3) : undefined) +
+          '>') + '</div>';
       return ui.card('Dimensioni e vincolo quota', '', body);
     }
     body = '<label class="callout"><input type="checkbox" id="f_auto_height"' + (dims.auto ? ' checked' : '') + '>' +
@@ -87,6 +91,25 @@
       ui.field('Altezza (m)', '<div class="unit"><input id="f_height" class="num" value="' + BIM.num(dims.height, 3) + '"' +
         (dims.auto ? ' disabled' : '') + '><span>m</span></div>') + '<div></div></div>';
     return ui.card('Dimensioni e vincolo quota', dims.auto ? '<span class="ok-text">Vincolato al livello</span>' : '', body);
+  }
+
+  // Vincolo dell'estradosso del solaio ai livelli (come l'altezza dei muri).
+  function anchorField(list, selected, blank) {
+    return ui.field('Estradosso segue', '<select id="f_slab_anchor">' +
+      ui.options(list.map(function (a) { return { value: a.id, label: a.name }; }), selected, blank) + '</select>');
+  }
+
+  function slabAnchorCard(x) {
+    var note = x.reference === null || x.reference === undefined
+      ? 'Quota fissa: il solaio resta dove si trova quando cambiano i livelli.'
+      : 'Riferimento: ' + esc(x.reference_level) + (x.anchor === 'below' ? ' (testa, ' : ' (quota, ') +
+        BIM.num(x.reference, 3) + ' m); scostamento ' + BIM.num((x.top - x.reference) * 100, 1) + ' cm. ' +
+        'Il solaio lo segue quando cambiano i livelli.';
+    var body = '<div class="grid2">' + anchorField(x.anchors, x.anchor) +
+      ui.field('Estradosso (m)', '<div class="unit"><input id="f_slab_top" class="num" data-orig="' + BIM.num(x.top, 3) +
+        '" value="' + BIM.num(x.top, 3) + '"><span>m</span></div>') +
+      '</div><p class="muted small-text" style="margin:8px 0 0">' + note + '</p>';
+    return ui.card('Quota e vincolo al livello', x.anchor === 'fixed' ? '' : '<span class="ok-text">Vincolato al livello</span>', body);
   }
 
   // Stratigrafia di muro o solaio: barra degli strati, tabella e trasmittanza.
@@ -167,6 +190,14 @@
     return ui.card('Posizione nel muro', '', body);
   }
 
+  // Selezione multipla: i campi mostrano il valore comune a tutti gli
+  // elementi; se i valori sono diversi il campo resta vuoto e non cambia.
+  var DIFFERENT = '(valori diversi)';
+
+  function commonValue(value) {
+    return value === undefined ? ' placeholder="' + DIFFERENT + '"' : ' value="' + esc(value) + '"';
+  }
+
   function propControl(p, value, multi) {
     var id = 'prop_' + p.name;
     // Valori della scala: derivano dalla geometria (riquadro Scala).
@@ -177,12 +208,13 @@
     }
     if (p.type === 'boolean') {
       var v = value === true ? 'true' : value === false ? 'false' : '';
-      return '<select id="' + id + '" data-prop="' + p.name + '">' + yesNo(v, multi ? '(invariato)' : '—') + '</select>';
+      var blank = !multi ? '—' : v ? undefined : DIFFERENT;
+      return '<select id="' + id + '" data-prop="' + p.name + '">' + yesNo(v, blank) + '</select>';
     }
     var shown = value === null || value === undefined ? '' : String(value);
     if (['real', 'length', 'area', 'thermal'].indexOf(p.type) >= 0) shown = shown.replace('.', ',');
     return '<input id="' + id + '" data-prop="' + p.name + '" value="' + esc(shown) + '"' +
-      (multi ? ' placeholder="(invariato)"' : '') + '>';
+      (multi && (value === null || value === undefined) ? ' placeholder="' + DIFFERENT + '"' : '') + '>';
   }
 
   function propsCard(typeKey, props, multi) {
@@ -229,7 +261,7 @@
     var e = state.element;
     var html = identityCard(e) + dimsCard(e.dims, false);
     if (e.wall) html += layersCard(e.wall, 'wall');
-    if (e.slab) html += layersCard(e.slab, 'slab') + holesCard(e.slab);
+    if (e.slab) html += slabAnchorCard(e.slab) + layersCard(e.slab, 'slab') + holesCard(e.slab);
     if (e.opening) html += openingCard(e.opening);
     if (e.stair) html += stairCard(e.stair);
     html += '<div id="propsBox">' + propsCard(e.type, e.props, false) + '</div>';
@@ -239,30 +271,45 @@
   }
 
   function renderMulti() {
+    var c = state.common || {};
+    var has = function (k) { return k in c; };
+    // Select con il valore comune, oppure con la voce "valori diversi".
+    var select = function (id, list, key, keep) {
+      var known = has(key) && list.some(function (o) { return String(o.value) === String(c[key]); });
+      var blank = known ? '' : '<option value="' + (keep || '') + '" selected>' + DIFFERENT + '</option>';
+      return '<select id="' + id + '">' + blank + ui.options(list, known ? c[key] : null) + '</select>';
+    };
     var summary = state.summary.map(function (s) { return esc(s.label) + ' <b>' + s.count + '</b>'; }).join(' · ');
     var objectType = state.opening_types
-      ? ui.field('Tipologia', '<select id="f_opening_type_id"><option value="(invariato)">(invariato)</option>' +
-          ui.options(typeList(state.opening_types), '') + '</select>')
-      : ui.field('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="(invariato)">');
+      ? ui.field('Tipologia', select('f_opening_type_id', typeList(state.opening_types), 'opening_type_id', '(invariato)'))
+      : ui.field('Tipologia (ObjectType)', '<input id="f_object_type"' + commonValue(c.object_type) + '>');
     var body = '<p class="muted" style="margin:0 0 8px">' + summary + '</p><div class="grid2">' +
-      ui.field('Categoria IFC', '<select id="f_type">' + ui.options(typeOptions(), '', '(invariato)') + '</select>') +
-      ui.field('Livello', '<select id="f_level">' + ui.options(levelOptions(), '', '(invariato)') + '</select>') +
+      ui.field('Categoria IFC', select('f_type', typeOptions(), 'type')) +
+      ui.field('Livello', select('f_level', levelOptions(), 'level')) +
       '</div>' + objectType +
-      ui.field('Materiale BIM', '<input id="f_material" placeholder="(invariato)">');
+      ui.field('Materiale BIM', '<input id="f_material"' + commonValue(c.material) + '>');
     var html = ui.card('Modifica comune · ' + state.count + ' elementi', '', body);
     html += dimsCard(state.dims ? {} : null, true);
     if (state.wall_types) {
       html += ui.card('Stratigrafia dei muri', '', '<div class="grid2">' +
-        ui.field('Stratigrafia', '<select id="f_wall_type_id"><option value="(invariato)">(invariato)</option>' +
-          '<option value="">(nessuna: muro unico)</option>' + ui.options(typeList(state.wall_types), '') + '</select>') +
-        ui.field('Strati invertiti', '<select id="f_wall_flipped">' + yesNo('', '(invariato)') + '</select>') + '</div>');
+        ui.field('Stratigrafia', select('f_wall_type_id', [{ value: '', label: '(nessuna: muro unico)' }]
+          .concat(typeList(state.wall_types)), 'wall_type_id', '(invariato)')) +
+        ui.field('Strati invertiti', select('f_wall_flipped', [{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No' }],
+          'wall_flipped')) + '</div>');
     }
     if (state.slab_types) {
-      html += ui.card('Stratigrafia dei solai', '', ui.field('Stratigrafia', '<select id="f_slab_type_id">' +
-        '<option value="(invariato)">(invariato)</option><option value="">(nessuna: solaio unico)</option>' +
-        ui.options(typeList(state.slab_types), '') + '</select>'));
+      html += ui.card('Stratigrafia dei solai', '', ui.field('Stratigrafia', select('f_slab_type_id',
+        [{ value: '', label: '(nessuna: solaio unico)' }].concat(typeList(state.slab_types)), 'slab_type_id', '(invariato)')));
     }
-    html += '<div id="propsBox">' + (state.common_type ? propsCard(state.common_type, {}, true) : '') + '</div>';
+    if (state.slab_anchors) {
+      var anchor = has('slab_anchor') ? c.slab_anchor : '';
+      html += ui.card('Quota e vincolo dei solai', '', '<div class="grid2">' +
+        anchorField(state.slab_anchors, anchor, anchor ? undefined : DIFFERENT) +
+        ui.field('Estradosso (m)', '<div class="unit"><input id="f_slab_top" class="num"' +
+          (has('slab_top') ? ' data-orig="' + BIM.num(c.slab_top, 3) + '"' : ' data-orig=""') +
+          commonValue(has('slab_top') ? BIM.num(c.slab_top, 3) : undefined) + '><span>m</span></div>') + '</div>');
+    }
+    html += '<div id="propsBox">' + (state.common_type ? propsCard(state.common_type, c.props, true) : '') + '</div>';
     return html + classifyCard();
   }
 
@@ -304,6 +351,10 @@
     if (ot) el.opening_type_id = ot.value;
     var od = $('f_opening_depth');
     if (od) el.opening_depth = od.value;
+    var sa = $('f_slab_anchor');
+    if (sa) el.slab_anchor = sa.value;
+    var stop = $('f_slab_top');
+    if (stop && stop.value !== stop.getAttribute('data-orig')) el.slab_top = stop.value;
     var st = $('f_slab_type_id');
     if (st) el.slab_type_id = st.value;
     var auto = $('f_auto_height');
@@ -339,6 +390,11 @@
     });
     ['f_stair_risers', 'f_stair_tread'].forEach(function (id) { on(id, 'input', updateStairInfo); });
     updateStairInfo();
+    // Altezza scritta con più elementi: diventa un valore fisso.
+    on('f_height', 'input', function () {
+      var a = $('f_auto_height');
+      if (a.tagName === 'SELECT' && a.value === 'true') a.value = 'false';
+    });
     on('f_auto_height', 'change', function () {
       var a = $('f_auto_height');
       if (a.type === 'checkbox') $('f_height').disabled = a.checked;
@@ -351,7 +407,7 @@
         if (box) box.innerHTML = propsCard(key, state.element.props, false);
       } else {
         var k = key || state.common_type;
-        box.innerHTML = k ? propsCard(k, {}, true) : '';
+        box.innerHTML = k ? propsCard(k, k === state.common_type ? (state.common || {}).props : {}, true) : '';
       }
     });
     on('addCustom', 'click', function () {

@@ -670,6 +670,8 @@ module BIMSketch
       end
 
       group = slab(model, pts, t, top_z, type_id: type && type['id'], level: upper['id'])
+      # In testa ai muri il solaio segue l'altezza del livello dei muri.
+      set_slab_anchor(model, group, 'below', anchor_level: lvl['id']) if at == :top
       failed = 0
       if stop_walls && at == :top
         walls.each do |w|
@@ -680,6 +682,82 @@ module BIMSketch
         end
       end
       { slab: group, failed: failed }
+    end
+
+    # Vincolo dell'estradosso di un solaio:
+    # - 'level': quota del livello del solaio (si sposta con la sua quota);
+    # - 'below': testa del livello sotto (quota + altezza), come i muri che
+    #   lo sostengono, per cui segue anche l'altezza di quel livello;
+    # - 'fixed': quota fissa, non segue i livelli.
+    # Lo scostamento dal riferimento (anchor_offset) resta quello impostato.
+    SLAB_ANCHORS = { 'level' => 'Quota del suo livello', 'below' => 'Testa del livello sotto',
+                     'fixed' => 'Quota fissa' }.freeze
+
+    def slab_anchor(slab)
+      a = slab.get_attribute(BimData::DICT, 'anchor').to_s
+      SLAB_ANCHORS.key?(a) ? a : 'level'
+    end
+
+    def slab?(entity)
+      BimData.element?(entity) && SLAB_TYPES.include?(BimData.type_key(entity))
+    end
+
+    # Estradosso del solaio (unità interne, coordinate del contesto).
+    def slab_top(slab)
+      slab.bounds.max.z
+    end
+
+    # Livello sotto quello del solaio (il più alto con quota inferiore);
+    # il livello stesso se non ce ne sono.
+    def level_below(model, slab)
+      own = Levels.find(model, BimData.level_id(slab)) || Levels.for_entity(model, slab)
+      lower = Levels.all(model).select { |l| l['elevation'] < own['elevation'] - LevelList::TOLERANCE }
+      lower.max_by { |l| l['elevation'] } || own
+    end
+
+    # Livello di riferimento per il vincolo 'below'.
+    def anchor_level(model, slab)
+      Levels.find(model, slab.get_attribute(BimData::DICT, 'anchor_level')) || level_below(model, slab)
+    end
+
+    # Quota di riferimento del vincolo (unità interne); nil se fissa.
+    def slab_reference(model, slab, anchor = slab_anchor(slab))
+      case anchor
+      when 'fixed' then nil
+      when 'below'
+        lvl = anchor_level(model, slab)
+        (lvl['elevation'] + lvl['height']).m
+      else
+        lvl = Levels.find(model, BimData.level_id(slab)) || Levels.for_entity(model, slab)
+        lvl['elevation'].m
+      end
+    end
+
+    # Imposta il vincolo (e, con top:, l'estradosso) di un solaio; lo
+    # scostamento dal riferimento è quello risultante.
+    def set_slab_anchor(model, slab, anchor, top: nil, anchor_level: nil)
+      anchor = 'level' unless SLAB_ANCHORS.key?(anchor)
+      slab.set_attribute(BimData::DICT, 'anchor', anchor)
+      if anchor == 'below'
+        id = anchor_level || slab.get_attribute(BimData::DICT, 'anchor_level')
+        id = level_below(model, slab)['id'] unless Levels.find(model, id)
+        slab.set_attribute(BimData::DICT, 'anchor_level', id)
+      end
+      move_slab_top(slab, top) if top
+      ref = slab_reference(model, slab, anchor)
+      slab.set_attribute(BimData::DICT, 'anchor_offset', ref ? (slab_top(slab) - ref).to_f : 0.0)
+      true
+    end
+
+    # Riporta il solaio sul suo riferimento (dopo un cambio dei livelli).
+    def sync_slab(model, slab)
+      ref = slab_reference(model, slab)
+      move_slab_top(slab, ref + slab.get_attribute(BimData::DICT, 'anchor_offset').to_f) if ref
+    end
+
+    def move_slab_top(slab, top)
+      dz = top - slab_top(slab)
+      slab.transform!(Geom::Transformation.translation([0, 0, dz])) if dz.abs > 0.1.mm
     end
 
     # Esiste già un solaio con lo stesso ingombro in pianta e l'estradosso

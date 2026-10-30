@@ -701,6 +701,27 @@ module BIMSketchAutotest
         [approx(s.bounds.max.z.to_m, 0.0, 0.001, 'estradosso alla base'),
          approx(height_m(walls.first), h0 - 0.25, 0.001, 'muri invariati')].join(', ')
       end
+      check('Il solaio in testa segue l\'altezza del livello; a quota fissa resta fermo') do
+        s = @e[:room_slab]
+        walls = @e[:room_walls]
+        assert(b.slab_anchor(s) == 'below', "vincolo del solaio in testa: #{b.slab_anchor(s)}")
+        set_level_height('L0', h0 + 0.5)
+        up = s.bounds.max.z.to_m
+        wall_up = height_m(walls.first)
+        model.start_operation('Autotest solaio a quota fissa', true)
+        b.set_slab_anchor(model, s, 'fixed')
+        model.commit_operation
+        set_level_height('L0', h0)
+        fixed = s.bounds.max.z.to_m
+        model.start_operation('Autotest solaio in testa', true)
+        b.set_slab_anchor(model, s, 'below', top: h0.m)
+        model.commit_operation
+        set_level_height('L0', h0)
+        [approx(up, h0 + 0.5, 0.001, 'estradosso con il livello più alto'),
+         approx(wall_up, h0 + 0.25, 0.001, 'muri sotto il solaio'),
+         approx(fixed, h0 + 0.5, 0.001, 'estradosso a quota fissa'),
+         approx(s.bounds.max.z.to_m, h0, 0.001, 'estradosso di nuovo in testa')].join(', ')
+      end
       check('Perimetro aperto rifiutato') do
         model.start_operation('Autotest perimetro aperto', true)
         res = b.slab_from_walls(model, @e[:room_walls].first(3), 0.25.m)

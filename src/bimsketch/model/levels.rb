@@ -64,7 +64,10 @@ module BIMSketch
     # - se la quota di un livello cambia, i suoi elementi si spostano in verticale;
     # - muri e pilastri con altezza automatica prendono l'altezza del livello;
     # - le travi (estradosso sotto il livello superiore) seguono la variazione
-    #   di altezza del livello.
+    #   di altezza del livello;
+    # - i solai seguono il loro vincolo (vedi Builder.slab_anchor): quelli a
+    #   quota fissa restano dove sono, quelli in testa al livello sotto ne
+    #   seguono quota e altezza.
     # Restituisce i livelli salvati; skipped_last_update indica quanti elementi
     # non sono stati adattati (modificati a mano o con aperture che non entrano).
     def update(model, new_levels, move_elements: true)
@@ -79,7 +82,7 @@ module BIMSketch
           delta = lvl['elevation'] - prev['elevation']
           unless delta.abs < 1e-6
             tr = Geom::Transformation.translation([0, 0, delta.m])
-            elements.each { |e| e.transform!(tr) }
+            elements.each { |e| e.transform!(tr) unless Builder.slab?(e) && Builder.slab_anchor(e) != 'level' }
           end
           dh = lvl['height'] - prev['height']
           unless dh.abs < 1e-6
@@ -93,6 +96,7 @@ module BIMSketch
         end
         sync_heights(model, elements, lvl)
       end
+      sync_slabs(model) if move_elements
       model.commit_operation
       list
     rescue StandardError
@@ -131,8 +135,22 @@ module BIMSketch
                                                e.get_attribute(BimData::DICT, 'auto_top') != false
         e.transform!(Geom::Transformation.translation([0, 0, dz.m])) unless dz.abs < 1e-6
         sync_heights(model, [e], to)
+        # In testa al livello sotto: il riferimento diventa quello sotto il nuovo livello.
+        if Builder.slab?(e) && Builder.slab_anchor(e) == 'below'
+          below = Builder.level_below(model, e)
+          offset = e.get_attribute(BimData::DICT, 'anchor_offset').to_f
+          Builder.set_slab_anchor(model, e, 'below', anchor_level: below['id'],
+                                                     top: (below['elevation'] + below['height']).m + offset)
+        end
       end
       @skipped
+    end
+
+    # Porta i solai vincolati alla testa del livello sotto sul loro riferimento.
+    def sync_slabs(model)
+      model.entities.each do |e|
+        Builder.sync_slab(model, e) if Builder.slab?(e) && Builder.slab_anchor(e) == 'below'
+      end
     end
 
     # Porta all'altezza del livello i muri e i pilastri con altezza automatica.

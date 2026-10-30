@@ -93,6 +93,25 @@
     return ui.card('Dimensioni e vincolo quota', dims.auto ? '<span class="ok-text">Vincolato al livello</span>' : '', body);
   }
 
+  // Vincolo dell'estradosso del solaio ai livelli (come l'altezza dei muri).
+  function anchorField(list, selected, blank) {
+    return ui.field('Estradosso segue', '<select id="f_slab_anchor">' +
+      ui.options(list.map(function (a) { return { value: a.id, label: a.name }; }), selected, blank) + '</select>');
+  }
+
+  function slabAnchorCard(x) {
+    var note = x.reference === null || x.reference === undefined
+      ? 'Quota fissa: il solaio resta dove si trova quando cambiano i livelli.'
+      : 'Riferimento: ' + esc(x.reference_level) + (x.anchor === 'below' ? ' (testa, ' : ' (quota, ') +
+        BIM.num(x.reference, 3) + ' m); scostamento ' + BIM.num((x.top - x.reference) * 100, 1) + ' cm. ' +
+        'Il solaio lo segue quando cambiano i livelli.';
+    var body = '<div class="grid2">' + anchorField(x.anchors, x.anchor) +
+      ui.field('Estradosso (m)', '<div class="unit"><input id="f_slab_top" class="num" data-orig="' + BIM.num(x.top, 3) +
+        '" value="' + BIM.num(x.top, 3) + '"><span>m</span></div>') +
+      '</div><p class="muted small-text" style="margin:8px 0 0">' + note + '</p>';
+    return ui.card('Quota e vincolo al livello', x.anchor === 'fixed' ? '' : '<span class="ok-text">Vincolato al livello</span>', body);
+  }
+
   // Stratigrafia di muro o solaio: barra degli strati, tabella e trasmittanza.
   function layersCard(x, kind) {
     var right = kind === 'wall' ? '<label class="check small-text"><input type="checkbox" id="f_wall_flipped"' +
@@ -242,7 +261,7 @@
     var e = state.element;
     var html = identityCard(e) + dimsCard(e.dims, false);
     if (e.wall) html += layersCard(e.wall, 'wall');
-    if (e.slab) html += layersCard(e.slab, 'slab') + holesCard(e.slab);
+    if (e.slab) html += slabAnchorCard(e.slab) + layersCard(e.slab, 'slab') + holesCard(e.slab);
     if (e.opening) html += openingCard(e.opening);
     if (e.stair) html += stairCard(e.stair);
     html += '<div id="propsBox">' + propsCard(e.type, e.props, false) + '</div>';
@@ -281,6 +300,14 @@
     if (state.slab_types) {
       html += ui.card('Stratigrafia dei solai', '', ui.field('Stratigrafia', select('f_slab_type_id',
         [{ value: '', label: '(nessuna: solaio unico)' }].concat(typeList(state.slab_types)), 'slab_type_id', '(invariato)')));
+    }
+    if (state.slab_anchors) {
+      var anchor = has('slab_anchor') ? c.slab_anchor : '';
+      html += ui.card('Quota e vincolo dei solai', '', '<div class="grid2">' +
+        anchorField(state.slab_anchors, anchor, anchor ? undefined : DIFFERENT) +
+        ui.field('Estradosso (m)', '<div class="unit"><input id="f_slab_top" class="num"' +
+          (has('slab_top') ? ' data-orig="' + BIM.num(c.slab_top, 3) + '"' : ' data-orig=""') +
+          commonValue(has('slab_top') ? BIM.num(c.slab_top, 3) : undefined) + '><span>m</span></div>') + '</div>');
     }
     html += '<div id="propsBox">' + (state.common_type ? propsCard(state.common_type, c.props, true) : '') + '</div>';
     return html + classifyCard();
@@ -324,6 +351,10 @@
     if (ot) el.opening_type_id = ot.value;
     var od = $('f_opening_depth');
     if (od) el.opening_depth = od.value;
+    var sa = $('f_slab_anchor');
+    if (sa) el.slab_anchor = sa.value;
+    var stop = $('f_slab_top');
+    if (stop && stop.value !== stop.getAttribute('data-orig')) el.slab_top = stop.value;
     var st = $('f_slab_type_id');
     if (st) el.slab_type_id = st.value;
     var auto = $('f_auto_height');

@@ -273,6 +273,7 @@ module BIMSketch
           data['summary'] = elements.group_by { |e| BimData.type(e) }.map do |t, es|
             { 'label' => t ? t.plural : '?', 'count' => es.size }
           end
+          data['common'] = common_payload(elements)
         else
           data['mode'] = 'none'
         end
@@ -302,6 +303,41 @@ module BIMSketch
             refresh
           }
         }
+      end
+
+      # Valori uguali in tutti gli elementi selezionati (gli altri restano
+      # vuoti nel pannello: "valori diversi").
+      def common_payload(elements)
+        values = elements.map { |e| comparable_values(e) }
+        common = {}
+        values.first.each do |k, v|
+          next if k == 'props'
+
+          common[k] = v if values.all? { |h| h.key?(k) && h[k] == v }
+        end
+        props = values.map { |h| h['props'] }
+        common['props'] = props.first.select { |k, v| props.all? { |p| p.key?(k) && p[k] == v } }
+        common
+      end
+
+      def comparable_values(entity)
+        d = BimData.read(entity)
+        h = d.slice('type', 'level', 'object_type', 'material')
+        h['props'] = d['props']
+        info = Builder.element_height(model, entity)
+        if info
+          h['auto_height'] = info[:auto]
+          h['height'] = info[:height].to_m.round(4)
+        end
+        if Builder.parametric_wall?(entity)
+          g = Builder.wall_geom(entity)
+          h['wall_type_id'] = g ? g[:type_id].to_s : ''
+          h['wall_flipped'] = g ? g[:flipped] == true : false
+        end
+        h['slab_type_id'] = Builder.slab_geom_type_id(entity).to_s if Builder.parametric_slab?(entity)
+        h['opening_type_id'] = entity.get_attribute(BimData::DICT, 'opening_type').to_s if
+          %w[door window].include?(BimData.type_key(entity))
+        h
       end
 
       def element_payload(entity)
@@ -470,12 +506,14 @@ module BIMSketch
         g = Builder.wall_geom(entity)
         if el.key?('wall_type_id') && !el['wall_type_id'].nil? && g
           id = el['wall_type_id'].to_s
+          # Stratigrafie diverse ma stesso verso scelto: ognuno tiene la sua.
+          id = g[:type_id].to_s if id == '(invariato)'
           flipped = case el['wall_flipped']
                     when true, 'true' then true
                     when false, 'false' then false
                     else g[:flipped]
                     end
-          unless id == '(invariato)' || (id == g[:type_id].to_s && flipped == g[:flipped])
+          unless id == g[:type_id].to_s && flipped == g[:flipped]
             ok = Builder.apply_wall_type(model, entity, id.empty? ? nil : id, flipped: flipped)
           end
         end

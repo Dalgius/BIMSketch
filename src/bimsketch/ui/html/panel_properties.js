@@ -73,10 +73,14 @@
     if (!dims) return '';
     var body;
     if (multi) {
+      var c = state.common || {};
+      var auto = 'auto_height' in c ? String(c.auto_height) : '';
       body = '<div class="grid2">' +
         ui.field('Altezza segue il livello', '<select id="f_auto_height">' +
-          ui.options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No (valore fisso)' }], '', '(invariato)') + '</select>') +
-        ui.field('Altezza (m)', '<input id="f_height" class="num" placeholder="(invariato)">') + '</div>';
+          ui.options([{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No (valore fisso)' }], auto,
+            auto ? undefined : DIFFERENT) + '</select>') +
+        ui.field('Altezza (m)', '<input id="f_height" class="num"' + commonValue('height' in c ? BIM.num(c.height, 3) : undefined) +
+          '>') + '</div>';
       return ui.card('Dimensioni e vincolo quota', '', body);
     }
     body = '<label class="callout"><input type="checkbox" id="f_auto_height"' + (dims.auto ? ' checked' : '') + '>' +
@@ -167,6 +171,14 @@
     return ui.card('Posizione nel muro', '', body);
   }
 
+  // Selezione multipla: i campi mostrano il valore comune a tutti gli
+  // elementi; se i valori sono diversi il campo resta vuoto e non cambia.
+  var DIFFERENT = '(valori diversi)';
+
+  function commonValue(value) {
+    return value === undefined ? ' placeholder="' + DIFFERENT + '"' : ' value="' + esc(value) + '"';
+  }
+
   function propControl(p, value, multi) {
     var id = 'prop_' + p.name;
     // Valori della scala: derivano dalla geometria (riquadro Scala).
@@ -177,12 +189,13 @@
     }
     if (p.type === 'boolean') {
       var v = value === true ? 'true' : value === false ? 'false' : '';
-      return '<select id="' + id + '" data-prop="' + p.name + '">' + yesNo(v, multi ? '(invariato)' : '—') + '</select>';
+      var blank = !multi ? '—' : v ? undefined : DIFFERENT;
+      return '<select id="' + id + '" data-prop="' + p.name + '">' + yesNo(v, blank) + '</select>';
     }
     var shown = value === null || value === undefined ? '' : String(value);
     if (['real', 'length', 'area', 'thermal'].indexOf(p.type) >= 0) shown = shown.replace('.', ',');
     return '<input id="' + id + '" data-prop="' + p.name + '" value="' + esc(shown) + '"' +
-      (multi ? ' placeholder="(invariato)"' : '') + '>';
+      (multi && (value === null || value === undefined) ? ' placeholder="' + DIFFERENT + '"' : '') + '>';
   }
 
   function propsCard(typeKey, props, multi) {
@@ -239,30 +252,37 @@
   }
 
   function renderMulti() {
+    var c = state.common || {};
+    var has = function (k) { return k in c; };
+    // Select con il valore comune, oppure con la voce "valori diversi".
+    var select = function (id, list, key, keep) {
+      var known = has(key) && list.some(function (o) { return String(o.value) === String(c[key]); });
+      var blank = known ? '' : '<option value="' + (keep || '') + '" selected>' + DIFFERENT + '</option>';
+      return '<select id="' + id + '">' + blank + ui.options(list, known ? c[key] : null) + '</select>';
+    };
     var summary = state.summary.map(function (s) { return esc(s.label) + ' <b>' + s.count + '</b>'; }).join(' · ');
     var objectType = state.opening_types
-      ? ui.field('Tipologia', '<select id="f_opening_type_id"><option value="(invariato)">(invariato)</option>' +
-          ui.options(typeList(state.opening_types), '') + '</select>')
-      : ui.field('Tipologia (ObjectType)', '<input id="f_object_type" placeholder="(invariato)">');
+      ? ui.field('Tipologia', select('f_opening_type_id', typeList(state.opening_types), 'opening_type_id', '(invariato)'))
+      : ui.field('Tipologia (ObjectType)', '<input id="f_object_type"' + commonValue(c.object_type) + '>');
     var body = '<p class="muted" style="margin:0 0 8px">' + summary + '</p><div class="grid2">' +
-      ui.field('Categoria IFC', '<select id="f_type">' + ui.options(typeOptions(), '', '(invariato)') + '</select>') +
-      ui.field('Livello', '<select id="f_level">' + ui.options(levelOptions(), '', '(invariato)') + '</select>') +
+      ui.field('Categoria IFC', select('f_type', typeOptions(), 'type')) +
+      ui.field('Livello', select('f_level', levelOptions(), 'level')) +
       '</div>' + objectType +
-      ui.field('Materiale BIM', '<input id="f_material" placeholder="(invariato)">');
+      ui.field('Materiale BIM', '<input id="f_material"' + commonValue(c.material) + '>');
     var html = ui.card('Modifica comune · ' + state.count + ' elementi', '', body);
     html += dimsCard(state.dims ? {} : null, true);
     if (state.wall_types) {
       html += ui.card('Stratigrafia dei muri', '', '<div class="grid2">' +
-        ui.field('Stratigrafia', '<select id="f_wall_type_id"><option value="(invariato)">(invariato)</option>' +
-          '<option value="">(nessuna: muro unico)</option>' + ui.options(typeList(state.wall_types), '') + '</select>') +
-        ui.field('Strati invertiti', '<select id="f_wall_flipped">' + yesNo('', '(invariato)') + '</select>') + '</div>');
+        ui.field('Stratigrafia', select('f_wall_type_id', [{ value: '', label: '(nessuna: muro unico)' }]
+          .concat(typeList(state.wall_types)), 'wall_type_id', '(invariato)')) +
+        ui.field('Strati invertiti', select('f_wall_flipped', [{ value: 'true', label: 'Sì' }, { value: 'false', label: 'No' }],
+          'wall_flipped')) + '</div>');
     }
     if (state.slab_types) {
-      html += ui.card('Stratigrafia dei solai', '', ui.field('Stratigrafia', '<select id="f_slab_type_id">' +
-        '<option value="(invariato)">(invariato)</option><option value="">(nessuna: solaio unico)</option>' +
-        ui.options(typeList(state.slab_types), '') + '</select>'));
+      html += ui.card('Stratigrafia dei solai', '', ui.field('Stratigrafia', select('f_slab_type_id',
+        [{ value: '', label: '(nessuna: solaio unico)' }].concat(typeList(state.slab_types)), 'slab_type_id', '(invariato)')));
     }
-    html += '<div id="propsBox">' + (state.common_type ? propsCard(state.common_type, {}, true) : '') + '</div>';
+    html += '<div id="propsBox">' + (state.common_type ? propsCard(state.common_type, c.props, true) : '') + '</div>';
     return html + classifyCard();
   }
 
@@ -339,6 +359,11 @@
     });
     ['f_stair_risers', 'f_stair_tread'].forEach(function (id) { on(id, 'input', updateStairInfo); });
     updateStairInfo();
+    // Altezza scritta con più elementi: diventa un valore fisso.
+    on('f_height', 'input', function () {
+      var a = $('f_auto_height');
+      if (a.tagName === 'SELECT' && a.value === 'true') a.value = 'false';
+    });
     on('f_auto_height', 'change', function () {
       var a = $('f_auto_height');
       if (a.type === 'checkbox') $('f_height').disabled = a.checked;
@@ -351,7 +376,7 @@
         if (box) box.innerHTML = propsCard(key, state.element.props, false);
       } else {
         var k = key || state.common_type;
-        box.innerHTML = k ? propsCard(k, {}, true) : '';
+        box.innerHTML = k ? propsCard(k, k === state.common_type ? (state.common || {}).props : {}, true) : '';
       }
     });
     on('addCustom', 'click', function () {

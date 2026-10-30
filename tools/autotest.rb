@@ -1163,6 +1163,26 @@ module BIMSketchAutotest
         BIMSketch::Levels.create_plan_view(model, 'L0') # la pianta resta per i controlli successivi
         'sezione disattivata, scena "Vista 3D" creata'
       end
+      check('Selezione multipla: il pannello mostra i valori comuni') do
+        model.start_operation('Autotest selezione multipla', true)
+        walls = [0, 6, 12].map do |x|
+          BIMSketch::Builder.wall(model, pt(x, 300, 0), pt(x + 5, 300, 0), 0.3.m, 3.m, 'center', type_id: 'WT1')
+        end
+        BIMSketch::Builder.set_height(model, walls[2], height: 2.7.m, auto: false)
+        model.commit_operation
+        panel = BIMSketch::Dialogs::Properties.allocate
+        same = panel.send(:common_payload, walls.first(2))
+        mixed = panel.send(:common_payload, walls)
+        model.start_operation('Autotest selezione multipla', true)
+        walls.each(&:erase!)
+        model.commit_operation
+        assert(same['wall_type_id'] == 'WT1' && same['type'] == 'wall', "comuni: #{same.inspect}")
+        assert(same['height'] && (same['height'] - 3.0).abs < 0.001, "altezza comune: #{same['height'].inspect}")
+        assert(!same['props'].empty?, 'nessuna proprietà Pset comune')
+        assert(!mixed.key?('height') && mixed['wall_type_id'] == 'WT1', "altezze diverse: #{mixed.inspect}")
+        "stratigrafia #{same['wall_type_id']}, altezza #{same['height']}, #{same['props'].size} proprietà comuni; " \
+          'altezze diverse non mostrate'
+      end
       check('In pianta porte e finestre trovano il muro sotto il cursore') do
         down = Geom::Vector3d.new(0, 0, -1)
         hit = BIMSketch::Builder.wall_under_ray(model, [pt(2.5, 0.05, 50), down])

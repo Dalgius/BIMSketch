@@ -800,6 +800,52 @@ module BIMSketchAutotest
         assert(ok, 'fori non tolti')
         approx(volume_m3(s), 8.3 * 6.3 * 0.25, 0.002, 'volume senza fori')
       end
+      check('Scala a L con pianerottolo (svolta a sinistra) e vano a L nel solaio') do
+        s = @e[:room_slab]
+        vol = volume_m3(s)
+        model.start_operation('Autotest scala a L', true)
+        res = b.stair(model, pt(0.5, 200.2, 0), pt(5, 200.2, 0), 1.0.m, h0.m, align: 'left', shape: 'l', turn: 'left')
+        model.commit_operation
+        assert(res, 'scala a L non creata')
+        st = res[:stair]
+        @e[:l_stair] = st
+        c = BIMSketch::StairCalc.compute(h0)
+        n1 = BIMSketch::StairCalc.l_split(c[:risers])
+        run1 = (n1 - 1) * c[:tread]
+        run2 = (c[:risers] - n1 - 1) * c[:tread]
+        assert(res[:hole] == :ok, "foro: #{res[:hole]}")
+        assert((v = volume_m3(st)) && v > 0, 'la scala a L non è un solido')
+        assert(st.get_attribute('BIMSketch', 'predefined') == 'QUARTER_TURN_STAIR', 'tipo IFC non QUARTER_TURN_STAIR')
+        props = BIMSketch::BimData.json_attr(st, 'props')
+        assert(props['NumberOfTreads'] == c[:risers] - 2, "pedate: #{props['NumberOfTreads']}")
+        area = run1 * 1.0 + 1.0 + run2 * 1.0
+        [approx(st.bounds.max.z.to_m, h0 - c[:riser], 0.001, 'ultima pedata'),
+         approx((st.bounds.max.x - st.bounds.min.x).to_m, run1 + 1.0, 0.002, 'ingombro x'),
+         approx((st.bounds.max.y - st.bounds.min.y).to_m, 1.0 + run2, 0.002, 'ingombro y'),
+         approx(st.bounds.min.y.to_m, 200.2, 0.001, 'bordo destro sulla linea'),
+         approx(volume_m3(s), vol - area * 0.25, 0.003, 'volume solaio con il vano a L'),
+         "rampe #{n1} + #{c[:risers] - n1} alzate"].join(', ')
+      end
+      check('Scala a L modificata: prima rampa più corta, poi rettilinea; il vano segue') do
+        st = @e[:l_stair]
+        s = @e[:room_slab]
+        model.start_operation('Autotest modifica scala a L', true)
+        bad = b.update_stair(model, st, flight1: 1)
+        res = b.update_stair(model, st, flight1: 7)
+        d = BIMSketch::Builder.stair_data(st)
+        p = d['tread']
+        ext = [(st.bounds.max.x - st.bounds.min.x).to_m, (st.bounds.max.y - st.bounds.min.y).to_m]
+        res2 = b.update_stair(model, st, shape: 'straight')
+        model.commit_operation
+        assert(bad == :invalid, "prima rampa da 1 alzata accettata: #{bad}")
+        assert(res == :ok && res2 == :ok, "modifica: #{res}, #{res2}")
+        assert(st.get_attribute('BIMSketch', 'predefined') == 'STRAIGHT_RUN_STAIR', 'tipo IFC non aggiornato')
+        n = d['risers']
+        [approx(ext[0], 6 * p + 1.0, 0.002, 'ingombro x (7 alzate)'),
+         approx(ext[1], 1.0 + (n - 8) * p, 0.002, 'ingombro y'),
+         approx((st.bounds.max.x - st.bounds.min.x).to_m, (n - 1) * p, 0.002, 'rettilinea: lunghezza'),
+         approx(volume_m3(s), 8.3 * 6.3 * 0.25 - (n - 1) * p * 1.0 * 0.25, 0.003, 'volume solaio')].join(', ')
+      end
     end
 
     def set_level_height(id, height)

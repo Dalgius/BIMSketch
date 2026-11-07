@@ -138,8 +138,20 @@
   // e regola di Blondel calcolate mentre si scrive.
   var STAIR_PROPS = ['NumberOfRiser', 'NumberOfTreads', 'RiserHeight', 'TreadLength'];
 
+  var STAIR_SHAPES = [{ value: 'straight', label: 'Rettilinea' },
+    { value: 'l_left', label: 'A L, svolta a sinistra' }, { value: 'l_right', label: 'A L, svolta a destra' }];
+
+  function stairShape(st) {
+    return st.shape === 'l' ? (st.turn === 'right' ? 'l_right' : 'l_left') : 'straight';
+  }
+
   function stairCard(st) {
+    var shape = stairShape(st);
+    var f1 = st.shape === 'l' ? String(st.flight1) : '';
     var body = '<div class="grid2">' +
+      ui.field('Forma', '<select id="f_stair_shape" data-orig="' + shape + '">' + ui.options(STAIR_SHAPES, shape) + '</select>') +
+      ui.field('Alzate prima rampa', '<input id="f_stair_flight1" class="num" data-orig="' + f1 + '" value="' + f1 + '"' +
+        (shape === 'straight' ? ' disabled' : '') + ' title="Compresa l\'alzata che sale sul pianerottolo">') +
       ui.field('Numero di alzate', '<input id="f_stair_risers" class="num" data-orig="' + st.risers + '" value="' + st.risers + '">') +
       ui.field('Pedata (cm)', '<div class="unit"><input id="f_stair_tread" class="num" data-orig="' + BIM.num(st.tread * 100, 1) +
         '" value="' + BIM.num(st.tread * 100, 1) + '"><span>cm</span></div>') +
@@ -161,7 +173,13 @@
     if (!(n >= 2) || !(p > 0)) { info.textContent = 'Valori non validi'; return; }
     var a = st.height / n * 100;
     var b = 2 * a + p;
-    info.innerHTML = '<span>Alzata ' + BIM.num(a, 1) + ' cm · lunghezza ' + BIM.num((n - 1) * p / 100, 2) + ' m</span>' +
+    var size = 'lunghezza ' + BIM.num((n - 1) * p / 100, 2) + ' m';
+    if ($('f_stair_shape').value !== 'straight') {
+      var n1 = parseInt($('f_stair_flight1').value, 10);
+      if (!(n1 >= 2 && n1 <= n - 2)) { info.textContent = 'Scala a L: almeno 2 alzate per rampa'; return; }
+      size = 'rampe ' + n1 + ' + ' + (n - n1) + ' alzate';
+    }
+    info.innerHTML = '<span>Alzata ' + BIM.num(a, 1) + ' cm · ' + size + '</span>' +
       '<span' + (b < 62 || b > 64 ? ' class="error-text"' : '') + '>2a + p = ' + BIM.num(b, 1) + ' cm</span>';
   }
 
@@ -343,7 +361,7 @@
       var f = $('f_opening_' + k);
       if (f && f.value !== f.getAttribute('data-orig')) el['opening_' + k] = f.value;
     });
-    ['risers', 'tread', 'width'].forEach(function (k) {
+    ['risers', 'tread', 'width', 'shape', 'flight1'].forEach(function (k) {
       var f = $('f_stair_' + k);
       if (f && f.value !== f.getAttribute('data-orig')) el['stair_' + k] = f.value;
     });
@@ -388,7 +406,13 @@
       f.select();
       try { document.execCommand('copy'); BIM.panel.status('GlobalId copiato'); } catch (e) { /* niente appunti */ }
     });
-    ['f_stair_risers', 'f_stair_tread'].forEach(function (id) { on(id, 'input', updateStairInfo); });
+    ['f_stair_risers', 'f_stair_tread', 'f_stair_flight1'].forEach(function (id) { on(id, 'input', updateStairInfo); });
+    on('f_stair_shape', 'change', function () {
+      var f1 = $('f_stair_flight1');
+      f1.disabled = $('f_stair_shape').value === 'straight';
+      if (!f1.disabled && !f1.value) f1.value = Math.ceil((parseInt($('f_stair_risers').value, 10) || 4) / 2);
+      updateStairInfo();
+    });
     updateStairInfo();
     // Altezza scritta con più elementi: diventa un valore fisso.
     on('f_height', 'input', function () {

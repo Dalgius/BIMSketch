@@ -96,4 +96,38 @@ class StairCalcTest < Minitest::Test
     assert_in_delta 2 * 3.0 / 17 + 0.30, S.blondel(c), 1e-12
     assert_equal 2, S.fixed(3.0, 1, 0.3)[:risers]
   end
+
+  def test_landing_flight_profile
+    c = S.fixed(3.0, 18, 0.28).merge(risers: 9)
+    pts = S.profile(c, landing: true)
+    drop = S.drop(c, 0.18)
+    assert_equal [0.0, -drop], pts.first
+    assert_in_delta 8 * c[:riser], pts.map(&:last).max, 1e-9
+    assert_equal pts.size, pts.uniq.size
+    assert BIMSketch::Polygon.signed_area(pts).abs.positive?
+  end
+
+  def test_l_split_and_validity
+    assert_equal 9, S.l_split(18)
+    assert_equal 9, S.l_split(17)
+    assert_equal 2, S.l_split(4)
+    assert S.valid_l?(18, 9)
+    refute S.valid_l?(18, 17)
+    refute S.valid_l?(3, 2)
+  end
+
+  def test_l_outline
+    c = S.fixed(3.0, 18, 0.28)
+    left = S.outline(c, 1.0, shape: 'l', flight1: 9, turn: 'left')
+    right = S.outline(c, 1.0, shape: 'l', flight1: 9, turn: 'right')
+    assert_equal 6, left.size
+    # Flight 1: 8 treads, then a 1 m landing; flight 2: 8 treads.
+    assert_in_delta 8 * 0.28 + 1.0, left.map(&:first).max, 1e-9
+    assert_in_delta 1.0 + 8 * 0.28, left.map(&:last).max, 1e-9
+    assert_in_delta(-8 * 0.28, right.map(&:last).min, 1e-9)
+    area = 8 * 0.28 * 1.0 + 1.0 + 8 * 0.28 * 1.0
+    assert_in_delta area, BIMSketch::Polygon.signed_area(left).abs, 1e-9
+    assert_in_delta area, BIMSketch::Polygon.signed_area(right).abs, 1e-9
+    assert_equal 4, S.outline(c, 1.0).size
+  end
 end

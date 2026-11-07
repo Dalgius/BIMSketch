@@ -808,10 +808,13 @@ module BIMSketch
     # StairCalc). align dice dove sta la linea start-toward, come per i muri:
     # 'center' sull'asse, 'left' scala a sinistra della linea (la linea è il
     # bordo destro), 'right' scala a destra. Con cut_slab apre il foro nel
-    # solaio che ha l'estradosso alla quota di arrivo. Restituisce { stair:,
-    # hole: :ok | :none | :outside | :overlap | :modified }.
+    # solaio che ha l'estradosso alla quota di arrivo. shape 'l' fa una scala
+    # a L: la prima rampa (flight1 alzate, metà se non indicato) arriva a un
+    # pianerottolo quadrato, la seconda gira a sinistra o a destra (turn).
+    # Restituisce { stair:, hole: :ok | :none | :outside | :overlap | :modified }
+    # oppure nil (direzione nulla o scala a L con meno di 4 alzate).
     def stair(model, start, toward, width, height, max_riser: 175.mm, waist: 180.mm, cut_slab: true,
-              align: 'center')
+              align: 'center', shape: 'straight', turn: 'left', flight1: nil)
       dir = toward - start
       dir.z = 0
       return nil if dir.length < Geometry::TOL
@@ -823,6 +826,12 @@ module BIMSketch
       origin = origin.offset(Z_AXIS * x, lo) unless lo.zero?
       tr = Geometry.frame_transform(origin, x)
       data = stair_record(calc, width.to_m, waist.to_m, align)
+      if shape == 'l'
+        n1 = flight1 || StairCalc.l_split(calc[:risers])
+        return nil unless StairCalc.valid_l?(calc[:risers], n1)
+
+        data.merge!('shape' => 'l', 'turn' => turn == 'right' ? 'right' : 'left', 'flight1' => n1)
+      end
       group = Geometry.create_group(model, tr) { |ents| build_stair(ents, data) }
       finish(model, group, 'stair')
       store_stair(group, data)
@@ -836,8 +845,44 @@ module BIMSketch
 
     def build_stair(ents, data)
       calc = data.transform_keys(&:to_sym)
+      return build_l_stair(ents, data, calc) if data['shape'] == 'l'
+
       pts = StairCalc.profile(calc, waist: data['waist']).map { |px, pz| [px.m, pz.m] }
       Geometry.extrude_xz(ents, pts, data['width'].m)
+    end
+
+    # Scala a L: prima rampa, pianerottolo e seconda rampa come gruppi annidati
+    # che si toccano senza sovrapporsi (il volume è la loro somma).
+    def build_l_stair(ents, data, calc)
+      w = data['width']
+      f = StairCalc.l_flights(calc, data['flight1'], w)
+      a = calc[:riser]
+      drop = StairCalc.drop(calc, data['waist'])
+      flight = lambda do |name, risers, landing, tr|
+        g = ents.add_group
+        pts = StairCalc.profile(calc.merge(risers: risers), waist: data['waist'], landing: landing)
+        Geometry.extrude_xz(g.entities, pts.map { |px, pz| [px.m, pz.m] }, w.m)
+        g.transformation = tr
+        g.name = name
+      end
+      flight.call('Rampa 1', f[:flight1], false, Geom::Transformation.new)
+      land = ents.add_group
+      z0 = [f[:landing_z] - a - drop, 0.0].max
+      land.entities.add_face([[0, 0], [w, 0], [w, w], [0, w]].map { |x, y| Geom::Point3d.new(x.m, y.m, z0.m) })
+                   .tap { |face| face.reverse! if face.normal.z > 0 }
+                   .pushpull(-(f[:landing_z] - z0).m)
+      land.transformation = Geom::Transformation.translation([f[:landing_x].m, 0, 0])
+      land.name = 'Pianerottolo'
+      # Seconda rampa: parte dal bordo del pianerottolo, a 90° verso sinistra
+      # (+y) o destra (-y); il suo asse y locale attraversa il pianerottolo.
+      if data['turn'] == 'right'
+        origin = Geom::Point3d.new(f[:landing_x].m, 0, f[:landing_z].m)
+        xaxis = Geom::Vector3d.new(0, -1, 0)
+      else
+        origin = Geom::Point3d.new((f[:landing_x] + w).m, w.m, f[:landing_z].m)
+        xaxis = Geom::Vector3d.new(0, 1, 0)
+      end
+      flight.call('Rampa 2', f[:flight2], true, Geometry.frame_transform(origin, xaxis))
     end
 
     # Dati della scala (metri): risers, riser, tread, treads, run, height,
@@ -858,23 +903,27 @@ module BIMSketch
     def store_stair(stair, data)
       stair.set_attribute(BimData::DICT, 'stair_geom', JSON.generate(data))
       props = BimData.json_attr(stair, 'props').merge(
-        'NumberOfRiser' => data['risers'], 'NumberOfTreads' => data['treads'],
+        'NumberOfRiser' => data['risers'], 'NumberOfTreads' => data['shape'] == 'l' ? data['risers'] - 2 : data['treads'],
         'RiserHeight' => data['riser'].round(4), 'TreadLength' => data['tread'].round(4)
       )
       stair.set_attribute(BimData::DICT, 'props', JSON.generate(props))
+      l = data['shape'] == 'l'
+      kind = l ? "Scala a L (svolta a #{data['turn'] == 'right' ? 'destra' : 'sinistra'}) con pianerottolo" : 'Scala rettilinea'
       stair.set_attribute(BimData::DICT, 'object_type',
-                          format('Scala rettilinea, %d alzate da %.1f cm, pedata %.1f cm', data['risers'],
+                          format('%s, %d alzate da %.1f cm, pedata %.1f cm', kind, data['risers'],
                                  data['riser'] * 100, data['tread'] * 100).tr('.', ','))
+      stair.set_attribute(BimData::DICT, 'predefined', l ? 'QUARTER_TURN_STAIR' : 'STRAIGHT_RUN_STAIR')
     end
 
     # Impronta della rampa in pianta (punti mondo alla quota z).
     def stair_footprint(model, stair, data, z)
       ctx = model.active_path ? model.edit_transform : Geom::Transformation.new
       world = ctx * stair.transformation
-      run = data['run'].m
-      w = data['width'].m
-      [[0, 0], [run, 0], [run, w], [0, w]].map do |x, y|
-        p = Geom::Point3d.new(x, y, 0).transform(world)
+      calc = data.transform_keys(&:to_sym)
+      poly = StairCalc.outline(calc, data['width'], shape: data['shape'], flight1: data['flight1'],
+                                                    turn: data['turn'])
+      poly.map do |x, y|
+        p = Geom::Point3d.new(x.m, y.m, 0).transform(world)
         Geom::Point3d.new(p.x, p.y, z)
       end
     end
@@ -889,7 +938,9 @@ module BIMSketch
       corners = stair_footprint(model, stair, data, top_z)
       slab = replace && model.active_entities.find { |e| parametric_slab?(e) && BimData.guid(e) == replace['slab'] }
       unless slab
-        center = Geom::Point3d.new(corners.sum(&:x) / 4.0, corners.sum(&:y) / 4.0, top_z + 1.m)
+        # Punto dentro la prima rampa (l'impronta a L non è convessa).
+        probe = [corners[0], corners[1], corners[-1]]
+        center = Geom::Point3d.new(probe.sum(&:x) / 3.0, probe.sum(&:y) / 3.0, top_z + 1.m)
         hit = slab_under_ray(model, [center, Geom::Vector3d.new(0, 0, -1)])
         return :none unless hit && (hit[1].z - top_z).abs < 1.mm
 
@@ -903,11 +954,12 @@ module BIMSketch
       result
     end
 
-    # Cambia alzate (numero), pedata e larghezza (m) di una scala e la
+    # Cambia alzate (numero), pedata, larghezza (m) e forma (shape 'straight'
+    # o 'l', turn, alzate della prima rampa flight1) di una scala e la
     # ricostruisce sul posto: la linea di partenza e l'allineamento restano,
     # il vano nel solaio segue. Restituisce :ok, :invalid (valori fuori dai
     # limiti) oppure lo stato del vano non adeguato (:outside, :overlap, :modified).
-    def update_stair(model, stair, risers: nil, tread: nil, width: nil)
+    def update_stair(model, stair, risers: nil, tread: nil, width: nil, shape: nil, turn: nil, flight1: nil)
       d = stair_data(stair)
       return :invalid unless d
 
@@ -917,6 +969,13 @@ module BIMSketch
       return :invalid unless n >= 2 && n <= 60 && p.between?(0.15, 0.45) && w >= 0.4 && w <= 5.0
 
       data = stair_record(StairCalc.fixed(d['height'].to_f, n, p), w, d['waist'], d['align'])
+      shape = shape.nil? ? d['shape'] : shape
+      if shape == 'l'
+        n1 = (flight1 || (d['shape'] == 'l' && d['risers'] == n ? d['flight1'] : nil) || StairCalc.l_split(n)).to_i
+        return :invalid unless StairCalc.valid_l?(n, n1)
+
+        data.merge!('shape' => 'l', 'turn' => (turn || d['turn']) == 'right' ? 'right' : 'left', 'flight1' => n1)
+      end
       tr = stair.transformation
       x = X_AXIS.transform(tr).normalize
       lo_old, = WallJoint.band(d['align'], d['width'].to_f.m)

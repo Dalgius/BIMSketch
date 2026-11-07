@@ -105,8 +105,11 @@ module BIMSketch
     end
 
     # Strumento Scala: clic sul primo gradino (asse o bordo, vedi
-    # l'allineamento dal tasto destro), poi nella direzione di salita. La scala supera l'altezza del livello corrente con alzate e
-    # pedate calcolate (regola di Blondel) e apre il foro nel solaio superiore.
+    # l'allineamento dal tasto destro), poi nella direzione di salita. La
+    # scala supera l'altezza del livello corrente con alzate e pedate
+    # calcolate (regola di Blondel) e apre il foro nel solaio superiore. Dal
+    # tasto destro si sceglie anche la forma: rettilinea o a L con
+    # pianerottolo (svolta a sinistra o a destra, rampe di metà alzate).
     class StairTool < BaseTool
       def enableVCB?
         false
@@ -131,7 +134,19 @@ module BIMSketch
                      'left' => 'Linea sul bordo destro (scala a sinistra)',
                      'right' => 'Linea sul bordo sinistro (scala a destra)' }.freeze
 
+      SHAPE_MENU = { 'straight' => 'Rettilinea', 'l_left' => 'A L con pianerottolo, svolta a sinistra',
+                     'l_right' => 'A L con pianerottolo, svolta a destra' }.freeze
+
       def getMenu(menu, *args)
+        forms = menu.add_submenu('Forma scala')
+        SHAPE_MENU.each do |key, label|
+          item = forms.add_item(label) do
+            Settings.set('stair_shape', key)
+            update_ui
+            Sketchup.active_model.active_view.invalidate
+          end
+          forms.set_validation_proc(item) { shape_key == key ? MF_CHECKED : MF_UNCHECKED }
+        end
         sub = menu.add_submenu('Allineamento scala')
         ALIGN_MENU.each do |key, label|
           item = sub.add_item(label) do
@@ -155,6 +170,19 @@ module BIMSketch
         ALIGN_MENU.key?(a) ? a : 'center'
       end
 
+      def shape_key
+        s = Settings.get('stair_shape')
+        SHAPE_MENU.key?(s) ? s : 'straight'
+      end
+
+      def shape
+        shape_key == 'straight' ? 'straight' : 'l'
+      end
+
+      def turn
+        shape_key == 'l_right' ? 'right' : 'left'
+      end
+
       def where
         { 'center' => 'sul centro', 'left' => 'sul bordo destro', 'right' => 'sul bordo sinistro' }[align]
       end
@@ -165,8 +193,14 @@ module BIMSketch
 
       def update_ui
         c = calc
-        info = format('%d alzate da %.1f cm, pedata %.1f cm, lunghezza %.2f m', c[:risers], c[:riser] * 100,
-                      c[:tread] * 100, c[:run]).tr('.', ',')
+        info = if shape == 'l'
+                 n1 = StairCalc.l_split(c[:risers])
+                 format('a L, %d + %d alzate da %.1f cm, pedata %.1f cm', n1, c[:risers] - n1, c[:riser] * 100,
+                        c[:tread] * 100).tr('.', ',')
+               else
+                 format('%d alzate da %.1f cm, pedata %.1f cm, lunghezza %.2f m', c[:risers], c[:riser] * 100,
+                        c[:tread] * 100, c[:run]).tr('.', ',')
+               end
         Sketchup.status_text = if @points.empty?
                                  "Scala (#{info}): clic #{where} del primo gradino. #{level_label}. " \
                                    'Tasto destro: allineamento.'
@@ -186,17 +220,26 @@ module BIMSketch
         x = dir.normalize
         lo, = WallJoint.band(align, width.to_f)
         origin = lo.zero? ? start : start.offset(Z_AXIS * x, lo)
-        @preview = box_loops(Geometry.frame_transform(origin, x), calc[:run].m, width, Levels.current_height(model))
+        tr = Geometry.frame_transform(origin, x)
+        c = calc
+        poly = StairCalc.outline(c, width.to_m, shape: shape, flight1: StairCalc.l_split(c[:risers]), turn: turn)
+        h = Levels.current_height(model)
+        bottom = poly.map { |px, py| Geom::Point3d.new(px.m, py.m, 0).transform(tr) }
+        top = poly.map { |px, py| Geom::Point3d.new(px.m, py.m, h).transform(tr) }
+        @preview = [bottom, top] + bottom.zip(top)
       end
 
       def create(pt)
         start = @points.first
         result = run_operation('BIMSketch: Scala') do
           Builder.stair(model, start, pt, width, Levels.current_height(model),
-                        max_riser: Settings.length('stair_riser'), align: align)
+                        max_riser: Settings.length('stair_riser'), align: align, shape: shape, turn: turn)
         end
         reset_tool
-        return unless result
+        unless result
+          UI.messagebox('La scala a L richiede almeno 4 alzate: usa la scala rettilinea.') if shape == 'l'
+          return
+        end
 
         message = {
           outside: 'il foro uscirebbe dal solaio o ne toccherebbe il bordo',

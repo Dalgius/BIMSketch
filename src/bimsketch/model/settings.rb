@@ -10,7 +10,7 @@ module BIMSketch
       'slab_thickness' => 250, 'slab_type' => '',
       'column_width' => 300, 'column_depth' => 300,
       'beam_width' => 300, 'beam_height' => 500, 'stair_width' => 1000, 'stair_riser' => 175,
-      'stair_align' => 'center',
+      'stair_align' => 'center', 'stair_shape' => 'straight',
       'door_type' => 'D1', 'window_type' => 'W2',
       'door_width' => 900, 'door_height' => 2100,
       'window_width' => 1200, 'window_height' => 1400, 'window_sill' => 900

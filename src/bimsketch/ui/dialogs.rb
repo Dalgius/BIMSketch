@@ -414,7 +414,8 @@ module BIMSketch
         if st
           data['stair'] = { 'risers' => st['risers'], 'riser' => st['riser'], 'tread' => st['tread'],
                             'width' => st['width'], 'height' => st['height'], 'run' => st['run'],
-                            'hole' => !st['hole'].nil? }
+                            'hole' => !st['hole'].nil?, 'shape' => st['shape'] || 'straight',
+                            'turn' => st['turn'], 'flight1' => st['flight1'] }
         end
         data['sketchup_material'] = entity.material ? entity.material.display_name : ''
         data
@@ -481,19 +482,25 @@ module BIMSketch
       end
 
       # Geometria della scala (campi 'stair_risers', 'stair_tread' e
-      # 'stair_width' in cm, inviati solo se modificati).
+      # 'stair_width' in cm, 'stair_shape' e 'stair_flight1', inviati solo se
+      # modificati).
       def apply_stair(entity, el)
         return true unless Builder.stair_data(entity)
 
         risers = el['stair_risers'].to_s.strip.empty? ? nil : el['stair_risers'].to_i
         tread = parse_m(el['stair_tread'])
         width = parse_m(el['stair_width'])
-        return true unless risers || tread || width
+        flight1 = el['stair_flight1'].to_s.strip.empty? ? nil : el['stair_flight1'].to_i
+        shape, turn = { 'straight' => ['straight', nil], 'l_left' => %w[l left],
+                        'l_right' => %w[l right] }[el['stair_shape'].to_s]
+        return true unless risers || tread || width || shape || flight1
 
         result = Builder.update_stair(model, entity, risers: risers, tread: tread && tread.to_m / 100.0,
-                                                     width: width && width.to_m / 100.0)
+                                                     width: width && width.to_m / 100.0,
+                                                     shape: shape, turn: turn, flight1: flight1)
         @stair_message = {
-          invalid: 'Valori della scala non validi: almeno 2 alzate, pedata tra 15 e 45 cm, larghezza tra 40 e 500 cm.',
+          invalid: 'Valori della scala non validi: almeno 2 alzate, pedata tra 15 e 45 cm, larghezza tra 40 e 500 cm; ' \
+                   'la scala a L vuole almeno 2 alzate per rampa.',
           outside: 'Scala aggiornata, ma il vano nel solaio non è stato adeguato: uscirebbe dal solaio.',
           overlap: 'Scala aggiornata, ma il vano nel solaio non è stato adeguato: si sovrapporrebbe a un altro foro.',
           modified: 'Scala aggiornata, ma il solaio è stato modificato a mano: il vano non è stato adeguato.'
